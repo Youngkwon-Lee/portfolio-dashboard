@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #161b22;
+  --card-border: #30363d;
+  --muted: #8b949e;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-blue: #58a6ff;
+  --accent-yellow: #e3b341;
+  --accent-purple: #bc8cff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', sans-serif;
+  margin: 0;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
+
+/* ── 모바일 반응형 ── */
+@media (max-width: 768px) {
+  /* 네비 탭 스크롤 */
+  .nav-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .nav-tabs::-webkit-scrollbar { display: none; }
+
+  /* 사이드 패널 → 전체 너비 */
+  .sidebar { width: 100% !important; border-right: none !important; border-bottom: 1px solid var(--card-border); }
+
+  /* 3컬럼 → 1컬럼 */
+  .dashboard-grid { flex-direction: column !important; }
+  .right-panel { width: 100% !important; border-left: none !important; border-top: 1px solid var(--card-border); }
+
+  /* 카드 그리드 축소 */
+  .kpi-grid-4 { grid-template-columns: repeat(2, 1fr) !important; }
+  .kpi-grid-3 { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* 텍스트 크기 */
+  .mobile-text-sm { font-size: 11px !important; }
+
+  /* 테이블 가로 스크롤 */
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+@media (max-width: 480px) {
+  .kpi-grid-4 { grid-template-columns: 1fr 1fr !important; }
+  .hide-mobile { display: none !important; }
+}

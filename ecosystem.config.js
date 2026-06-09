@@ -1,0 +1,41 @@
+module.exports = {
+  apps: [
+    {
+      name: "portfolio-backend",
+      script: "/Users/youngkwon/.pyenv/versions/3.12.2/bin/python",
+      args: "-m uvicorn main:app --host 0.0.0.0 --port 8000",
+      cwd: "/Users/youngkwon/projects/portfolio-dashboard/backend",
+      interpreter: "none",
+      watch: false,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 3000,
+      env: {
+        PYTHONPATH: "/Users/youngkwon/projects/portfolio-dashboard/backend",
+      },
+      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      error_file: "./logs/backend-error.log",
+      out_file: "./logs/backend-out.log",
+      merge_logs: true,
+    },
+    {
+      name: "portfolio-frontend",
+      script: "pnpm",
+      args: "start",
+      cwd: "/Users/youngkwon/projects/portfolio-dashboard",
+      interpreter: "none",
+      watch: false,
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 3000,
+      env: {
+        PORT: "3000",
+        NODE_ENV: "production",
+      },
+      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      error_file: "./logs/frontend-error.log",
+      out_file: "./logs/frontend-out.log",
+      merge_logs: true,
+    },
+  ],
+};

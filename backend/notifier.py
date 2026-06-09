@@ -11,19 +11,26 @@
 
 알림 종류:
   - 봇 시작/정지
-  - 매수/매도 체결
+  - 매수/매도 체결 (SL/TP/DCA 포함)
   - 서킷브레이커 발동
-  - 일일 리포트 (손익 요약)
+  - 일일 리포트
+  - 텔레그램 명령어: /status /stop /report /help
 """
 
+import asyncio
 import os
 import logging
-from typing import Optional
+from typing import Optional, Callable
 import httpx
 
 logger = logging.getLogger("notifier")
 
 TELEGRAM_BASE = "https://api.telegram.org"
+
+# 명령어 핸들러 등록 (trading_bot에서 주입)
+_cmd_handlers: dict[str, Callable] = {}
+_polling_task: Optional[asyncio.Task] = None
+_last_update_id: int = 0
 
 
 def _token()   -> str: return os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -34,8 +41,13 @@ def _enabled() -> bool:
     return bool(_token() and _chat_id())
 
 
+def register_handler(command: str, fn: Callable):
+    """명령어 핸들러 등록. command: "/status" 형태."""
+    _cmd_handlers[command] = fn
+
+
 async def send(text: str, parse_mode: str = "HTML") -> bool:
-    """텔레그램 메시지 전송. 키 없으면 로그만 남기고 조용히 패스."""
+    """텔레그램 메시지 전송."""
     if not _enabled():
         logger.info(f"[NOTIFY-SKIP] {text[:80]}")
         return False
@@ -43,12 +55,81 @@ async def send(text: str, parse_mode: str = "HTML") -> bool:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.post(
                 f"{TELEGRAM_BASE}/bot{_token()}/sendMessage",
-                json={"chat_id": _chat_id(), "text": text, "parse_mode": parse_mode},
+                json={"chat_id": _chat_id(), "text": text, "parse_mode": "HTML"},
             )
             return resp.status_code == 200
     except Exception as e:
         logger.warning(f"텔레그램 전송 실패: {e}")
         return False
+
+
+# ── 명령어 폴링 ──────────────────────────────────
+
+async def _poll_commands():
+    """백그라운드에서 텔레그램 명령어를 폴링."""
+    global _last_update_id
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=35) as client:
+                resp = await client.get(
+                    f"{TELEGRAM_BASE}/bot{_token()}/getUpdates",
+                    params={"offset": _last_update_id + 1, "timeout": 30, "allowed_updates": ["message"]},
+                )
+                if resp.status_code != 200:
+                    await asyncio.sleep(5)
+                    continue
+                updates = resp.json().get("result", [])
+
+            for upd in updates:
+                _last_update_id = upd["update_id"]
+                msg = upd.get("message", {})
+                text = msg.get("text", "").strip()
+                chat_id = str(msg.get("chat", {}).get("id", ""))
+
+                # 등록된 채팅 ID만 허용
+                if chat_id != _chat_id():
+                    continue
+
+                # /command 파싱
+                cmd = text.split()[0].lower() if text.startswith("/") else ""
+                if cmd and cmd in _cmd_handlers:
+                    try:
+                        result = await _cmd_handlers[cmd]()
+                        await send(result)
+                    except Exception as e:
+                        await send(f"❌ 오류: {e}")
+                elif cmd == "/help":
+                    await send(
+                        "📖 <b>사용 가능한 명령어</b>\n"
+                        "/status — 봇 현재 상태\n"
+                        "/stop   — 봇 정지\n"
+                        "/report — 손익 리포트\n"
+                        "/help   — 도움말"
+                    )
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"폴링 오류: {e}")
+            await asyncio.sleep(10)
+
+
+def start_polling():
+    """명령어 폴링 시작 (백그라운드 태스크)."""
+    global _polling_task
+    if not _enabled():
+        return
+    if _polling_task and not _polling_task.done():
+        return
+    _polling_task = asyncio.create_task(_poll_commands())
+    logger.info("텔레그램 명령어 폴링 시작")
+
+
+def stop_polling():
+    global _polling_task
+    if _polling_task and not _polling_task.done():
+        _polling_task.cancel()
+        _polling_task = None
 
 
 # ── 미리 만든 메시지 템플릿 ───────────────────────
@@ -60,7 +141,8 @@ async def notify_bot_start(mode: str, strategy: str, symbols: list[str], capital
         f"모드: <code>{mode.upper()}</code>\n"
         f"전략: <code>{strategy}</code>\n"
         f"종목: <code>{', '.join(symbols)}</code>\n"
-        f"자본: <code>{capital:,.0f}원</code>"
+        f"자본: <code>{capital:,.0f}원</code>\n\n"
+        f"💬 명령어: /status /stop /report /help"
     )
 
 
@@ -104,7 +186,7 @@ async def notify_circuit_breaker(reason: str, total_pnl_pct: float):
         f"🛑 <b>서킷브레이커 발동!</b>\n"
         f"사유: {reason}\n"
         f"누적 손익: <code>{total_pnl_pct:+.2f}%</code>\n"
-        f"⚠️ 봇이 자동 정지되었습니다. 확인이 필요합니다."
+        f"⚠️ 봇이 자동 정지되었습니다."
     )
 
 

@@ -48,6 +48,13 @@ MAX_DRAWDOWN_STOP  = 0.10   # 최대 낙폭 10% → 봇 정지
 KELLY_FRACTION     = 0.5    # 반 켈리 (Thorp 1997)
 COMMISSION         = 0.0010 # Binance 현물 0.10% (BNB 할인 미적용)
 
+# ── 리스크 파라미터 ───────────────────────────────
+STOP_LOSS_PCT      = 0.05   # 진입가 대비 -5% 손절
+TAKE_PROFIT_PCT    = 0.15   # 진입가 대비 +15% 익절
+DCA_THRESHOLD_PCT  = 0.03   # -3% 추가 하락 시 DCA 매수
+DCA_MAX_TIMES      = 2      # DCA 최대 2회
+DCA_SIZE_PCT       = 0.5    # DCA 시 기존 포지션의 50% 추가
+
 BINANCE_BASE = "https://api.binance.com"
 
 # ── 캐시 (CoinGecko 429 방지) ─────────────────────
@@ -462,6 +469,85 @@ async def execute_order(
     return None
 
 
+# ── Stop-Loss / Take-Profit / DCA ─────────────────
+
+async def check_sl_tp_dca(
+    symbol: str,
+    price: float,
+    status: BotStatus,
+    api_key: str = "",
+    api_secret: str = "",
+) -> Optional[str]:
+    """
+    포지션 보유 중 매 루프에서 호출.
+    - Stop-Loss  : 진입가 대비 -5% → 강제 손절
+    - Take-Profit: 진입가 대비 +15% → 익절
+    - DCA        : 진입가 대비 -3% 하락 시 추가 매수 (최대 2회)
+    반환값: "SL" | "TP" | "DCA" | None
+    """
+    pos = status.positions.get(symbol)
+    if not pos:
+        return None
+
+    avg   = pos["avg_price"]
+    chg   = (price - avg) / avg  # 수익률 (소수)
+    ts    = datetime.now(timezone.utc).isoformat()
+
+    # ── Take-Profit ──
+    if chg >= TAKE_PROFIT_PCT:
+        logger.info(f"[TP] {symbol} +{chg*100:.1f}% → 익절")
+        await execute_order(symbol, Signal.SELL, price, status, api_key, api_secret)
+        await notifier.send(f"🎯 *익절* `{symbol}` @ ${price:,.2f} (+{chg*100:.1f}%)")
+        return "TP"
+
+    # ── Stop-Loss ──
+    if chg <= -STOP_LOSS_PCT:
+        logger.info(f"[SL] {symbol} {chg*100:.1f}% → 손절")
+        await execute_order(symbol, Signal.SELL, price, status, api_key, api_secret)
+        await notifier.send(f"🛑 *손절* `{symbol}` @ ${price:,.2f} ({chg*100:.1f}%)")
+        return "SL"
+
+    # ── DCA ──
+    dca_count = pos.get("dca_count", 0)
+    dca_last  = pos.get("dca_last_price", avg)
+    dca_drop  = (price - dca_last) / dca_last  # 마지막 DCA 기준 추가 하락률
+
+    if dca_count < DCA_MAX_TIMES and dca_drop <= -DCA_THRESHOLD_PCT:
+        invest_extra = pos["invest"] * DCA_SIZE_PCT
+        if invest_extra > status.current_capital * 0.05 and invest_extra >= 1:
+            qty_extra = invest_extra / price
+            cost      = invest_extra * COMMISSION
+            status.current_capital -= (invest_extra + cost)
+
+            # 평균단가 재계산
+            total_qty    = pos["qty"] + qty_extra
+            total_invest = pos["invest"] + invest_extra
+            new_avg      = total_invest / total_qty
+
+            pos["qty"]            = total_qty
+            pos["invest"]         = total_invest
+            pos["avg_price"]      = new_avg
+            pos["dca_count"]      = dca_count + 1
+            pos["dca_last_price"] = price
+
+            trade = Trade(
+                id=f"{symbol}-dca-{int(time.time())}", symbol=symbol, side="BUY",
+                qty=qty_extra, price=price, cost=cost, mode=status.mode,
+                strategy=f"{status.strategy}[DCA#{dca_count+1}]", timestamp=ts,
+            )
+            status.trades.insert(0, asdict(trade))
+            status.trade_count += 1
+            await db.save_trade(asdict(trade))
+            logger.info(f"[DCA#{dca_count+1}] {symbol} @ {price:,.2f}  추가매수={invest_extra:,.0f}  새평단={new_avg:,.2f}")
+            await notifier.send(
+                f"📉 *DCA #{dca_count+1}* `{symbol}` @ ${price:,.2f}\n"
+                f"추가매수: ${invest_extra:,.0f} | 새 평단: ${new_avg:,.2f}"
+            )
+            return "DCA"
+
+    return None
+
+
 # ── 봇 메인 루프 ──────────────────────────────────
 
 async def _bot_loop(api_key: str = "", api_secret: str = ""):
@@ -504,8 +590,12 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
                     signal, info = await generate_signal(sym, _status.strategy)
                     signals[sym] = {"signal": signal, "price": price, **info}
 
-                    # 주문 실행
-                    await execute_order(sym, signal, price, _status, api_key, api_secret)
+                    # SL / TP / DCA 먼저 체크 (포지션 있을 때)
+                    sl_tp = await check_sl_tp_dca(sym, price, _status, api_key, api_secret)
+
+                    # SL/TP 청산 후에는 전략 신호 스킵
+                    if sl_tp not in ("SL", "TP"):
+                        await execute_order(sym, signal, price, _status, api_key, api_secret)
 
                 except Exception as e:
                     logger.error(f"{sym} 처리 오류: {e}")
@@ -588,6 +678,50 @@ def configure(
     )
 
 
+# ── 텔레그램 명령어 핸들러 ────────────────────────
+
+async def _cmd_status() -> str:
+    s = _status
+    pos_lines = ""
+    for sym, p in s.positions.items():
+        pnl_pct = p.get("unrealized_pnl_pct", 0)
+        e = "📈" if pnl_pct >= 0 else "📉"
+        pos_lines += f"\n  {e} {sym}: {pnl_pct:+.2f}%"
+
+    return (
+        f"🤖 <b>봇 상태</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"실행: <code>{'✅ 가동 중' if s.running else '⏹ 정지'}</code>\n"
+        f"모드: <code>{s.mode.upper()}</code>  전략: <code>{s.strategy}</code>\n"
+        f"자본: <code>{s.current_capital:,.0f}원</code>\n"
+        f"누적손익: <code>{s.total_pnl_pct:+.2f}%</code>  낙폭: <code>-{s.drawdown_pct:.2f}%</code>\n"
+        f"매매: <code>{s.trade_count}건</code>  승률: <code>{s.win_count/max(s.trade_count,1)*100:.0f}%</code>\n"
+        f"포지션:{pos_lines if pos_lines else ' <code>없음</code>'}"
+    )
+
+
+async def _cmd_stop() -> str:
+    if not _status.running:
+        return "⏹ 봇이 이미 정지 상태입니다."
+    await stop()
+    return "✅ 봇을 정지했습니다."
+
+
+async def _cmd_report() -> str:
+    s = _status
+    win_rate = s.win_count / max(s.trade_count, 1) * 100
+    d_emoji  = "📈" if s.daily_pnl_pct >= 0 else "📉"
+    t_emoji  = "🟢" if s.total_pnl >= 0 else "🔴"
+    return (
+        f"📊 <b>손익 리포트</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"당일 손익: {d_emoji} <code>{s.daily_pnl_pct:+.2f}%</code>\n"
+        f"누적 손익: {t_emoji} <code>{s.total_pnl:+,.0f}원 ({s.total_pnl_pct:+.2f}%)</code>\n"
+        f"최대 낙폭: <code>-{s.drawdown_pct:.2f}%</code>\n"
+        f"총 매매: <code>{s.trade_count}건</code>  승률: <code>{win_rate:.0f}%</code>"
+    )
+
+
 async def start(api_key: str = "", api_secret: str = ""):
     global _task, _status
     if _status.running:
@@ -607,6 +741,12 @@ async def start(api_key: str = "", api_secret: str = ""):
         _status.trades = saved_trades
         _status.trade_count = len([t for t in saved_trades if True])
         _status.win_count   = len([t for t in saved_trades if t.get("pnl", 0) > 0 and t["side"] == "SELL"])
+    # 텔레그램 명령어 핸들러 등록
+    notifier.register_handler("/status", _cmd_status)
+    notifier.register_handler("/stop",   _cmd_stop)
+    notifier.register_handler("/report", _cmd_report)
+    notifier.start_polling()
+
     await notifier.notify_bot_start(_status.mode, _status.strategy, _status.symbols, _status.current_capital)
     _task = asyncio.create_task(_bot_loop(api_key, api_secret))
 
@@ -620,4 +760,5 @@ async def stop():
             await _task
         except asyncio.CancelledError:
             pass
+    notifier.stop_polling()
     await notifier.notify_bot_stop(_status.total_pnl, _status.total_pnl_pct, _status.trade_count)

@@ -57,6 +57,12 @@ async def health():
     return {"status": "ok", "env": os.getenv("KIS_ENV", "vts"), "version": "2.0.0"}
 
 
+@app.get("/ping")
+async def ping():
+    """Render 슬립 방지용 핑 엔드포인트."""
+    return "pong"
+
+
 # ──────────────────────────────────────────────
 # 통합 현재가 (마켓 자동 감지)
 # ──────────────────────────────────────────────

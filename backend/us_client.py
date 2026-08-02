@@ -11,6 +11,7 @@ import httpx
 
 _CHART_CACHE_TTL_SECONDS = 60.0
 _chart_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
+_crypto_chart_cache: dict[tuple[str, str, str], tuple[float, list[dict]]] = {}
 
 # ─────────────────────────────────────────────────
 # 미국 주식 (yfinance는 동기 라이브러리 → run_in_executor)
@@ -113,6 +114,11 @@ PERIOD_TO_LIMIT = {
 
 async def get_crypto_chart_binance(ticker: str, period: str = "1M") -> list[dict]:
     """Binance Klines로 암호화폐 일봉 OHLCV 조회 (무제한·키 불필요)."""
+    cache_key = (ticker.upper(), period, "usd")
+    cached = _crypto_chart_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < _CHART_CACHE_TTL_SECONDS:
+        return [c.copy() for c in cached[1]]
+
     symbol = BINANCE_SYMBOL_MAP.get(ticker.upper(), f"{ticker.upper()}USDT")
     limit  = PERIOD_TO_LIMIT.get(period, 30)
 
@@ -136,7 +142,8 @@ async def get_crypto_chart_binance(ticker: str, period: str = "1M") -> list[dict
             "close":  float(k[4]),
             "volume": float(k[5]),
         })
-    return candles
+    _crypto_chart_cache[cache_key] = (time.monotonic(), candles)
+    return [c.copy() for c in candles]
 
 
 async def get_crypto_price_binance(ticker: str) -> dict:

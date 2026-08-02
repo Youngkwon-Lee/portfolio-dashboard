@@ -20,6 +20,8 @@ ACCOUNT_PROD = os.getenv("KIS_ACCOUNT_PROD_CODE", "01")
 
 # 토큰 캐시 (프로세스 내 메모리)
 _token_cache: dict = {"access_token": "", "expires_at": 0}
+_DAILY_CHART_CACHE_TTL_SECONDS = 60.0
+_daily_chart_cache: dict[tuple[str, str, str], tuple[float, list[dict]]] = {}
 
 
 async def get_access_token() -> str:
@@ -90,6 +92,11 @@ async def get_stock_price(ticker: str) -> dict:
 
 async def get_daily_chart(ticker: str, start: str, end: str) -> list[dict]:
     """일봉 데이터 조회 (국내). start/end: YYYYMMDD."""
+    cache_key = (ticker, start, end)
+    cached = _daily_chart_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < _DAILY_CHART_CACHE_TTL_SECONDS:
+        return [c.copy() for c in cached[1]]
+
     data = await _get(
         "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
         tr_id="FHKST03010100",
@@ -102,7 +109,7 @@ async def get_daily_chart(ticker: str, start: str, end: str) -> list[dict]:
             "FID_ORG_ADJ_PRC": "0",
         },
     )
-    return [
+    candles = [
         {
             "date": r["stck_bsop_date"],
             "open": int(r["stck_oprc"]),
@@ -113,6 +120,8 @@ async def get_daily_chart(ticker: str, start: str, end: str) -> list[dict]:
         }
         for r in data.get("output2", [])
     ]
+    _daily_chart_cache[cache_key] = (time.monotonic(), candles)
+    return [c.copy() for c in candles]
 
 
 # ──────────────────────────────────────────────

@@ -505,8 +505,8 @@ async def run_backtest(req: BacktestRequest):
     """논문 기반 백테스트 — look-ahead bias 제거, 거래비용 0.15% 반영."""
     try:
         chart = await get_chart(req.ticker, req.period)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"가격 데이터 조회 실패: {e}")
+    except Exception:
+        raise HTTPException(status_code=502, detail="가격 데이터 조회 실패")
 
     candles = chart.get("candles", []) if isinstance(chart, dict) else []
     if len(candles) < 10:

@@ -118,6 +118,30 @@ class ApiSafetyContractTests(unittest.TestCase):
                     self.assertEqual(response.status_code, 422)
         get_chart.assert_not_awaited()
 
+    def test_backtest_provider_failure_is_sanitized_as_502(self) -> None:
+        with patch.object(
+            main,
+            "get_chart",
+            new=AsyncMock(side_effect=RuntimeError("provider secret must not echo")),
+        ) as get_chart:
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 조회 실패"})
+        self.assertNotIn("provider secret must not echo", response.text)
+        get_chart.assert_awaited_once_with("BTC", "1Y")
+
+    def test_backtest_rejects_insufficient_market_data(self) -> None:
+        candles = [
+            {"date": str(i), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(9)
+        ]
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "데이터 부족 (최소 10개 캔들 필요)"})
+
 
 if __name__ == "__main__":
     unittest.main()

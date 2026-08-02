@@ -104,6 +104,20 @@ class ApiSafetyContractTests(unittest.TestCase):
         upbit_balance.assert_not_awaited()
         binance.assert_not_awaited()
 
+    def test_backtest_rejects_invalid_inputs_before_market_data_lookup(self) -> None:
+        invalid_payloads = [
+            {"ticker": "BTC", "initial": 0},
+            {"ticker": "BTC", "period": "5Y"},
+            {"ticker": "BTC", "strategy": "not_real"},
+            {"ticker": "BTC USD"},
+        ]
+        with patch.object(main, "get_chart", new=AsyncMock()) as get_chart:
+            for payload in invalid_payloads:
+                with self.subTest(payload=payload):
+                    response = self.client.post("/api/backtest", json=payload)
+                    self.assertEqual(response.status_code, 422)
+        get_chart.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

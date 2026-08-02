@@ -4,6 +4,7 @@
 """
 import os
 from datetime import datetime, timedelta
+from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -487,10 +488,16 @@ async def bot_safety_reset(payload: SafetyConfirmation):
 # ──────────────────────────────────────────────
 
 class BacktestRequest(BaseModel):
-    ticker:   str
-    period:   str = "1Y"          # 1M | 3M | 6M | 1Y
-    initial:  float = 10_000_000
-    strategy: str = "all"         # all | bah | dual_mom | sma_cross | bollinger | rsi
+    ticker: str = Field(
+        ...,
+        min_length=1,
+        max_length=20,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$",
+        description="Exchange ticker symbol; whitespace and control characters are rejected.",
+    )
+    period: Literal["1M", "3M", "6M", "1Y"] = "1Y"
+    initial: float = Field(10_000_000, gt=0, le=1_000_000_000_000)
+    strategy: Literal["all", "bah", "dual_mom", "sma_cross", "bollinger", "rsi"] = "all"
 
 
 @app.post("/api/backtest")

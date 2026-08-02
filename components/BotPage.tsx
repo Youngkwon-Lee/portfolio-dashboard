@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
+import { Gauge, LockKeyhole, OctagonX, Play, ShieldCheck, Square, TriangleAlert } from "lucide-react";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -24,6 +25,19 @@ interface BotStatus {
   win_count: number; last_signal: Record<string, SignalInfo>;
   last_run: string; error: string; circuit_breaker: boolean;
   positions: Record<string, Position>; trades: Trade[];
+  live_allowed: boolean;
+  safety?: {
+    execution_mode: string;
+    live_allowed: boolean;
+    credential_input_allowed: boolean;
+    live_block_reason: string;
+    state: {
+      kill_switch: boolean;
+      daily_halt: boolean;
+      reconciliation_required: boolean;
+      halt_reason: string;
+    };
+  };
 }
 interface SignalInfo {
   signal: string; price?: number; strategy?: string;
@@ -111,12 +125,9 @@ function PnlCurve({ trades }: { trades: Trade[] }) {
 
 export default function BotPage() {
   const [status,    setStatus]    = useState<BotStatus | null>(null);
-  const [mode,      setMode]      = useState<"paper"|"live">("paper");
   const [strategy,  setStrategy]  = useState("dual_mom");
   const [symbols,   setSymbols]   = useState<string[]>(["BTC", "ETH"]);
   const [capital,   setCapital]   = useState("1000000");
-  const [bnKey,     setBnKey]     = useState("");
-  const [bnSecret,  setBnSecret]  = useState("");
   const [starting,  setStarting]  = useState(false);
   const [activeTab, setActiveTab] = useState<"signals"|"positions"|"trades">("signals");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -141,10 +152,8 @@ export default function BotPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode, strategy, symbols,
+          mode: "paper", strategy, symbols,
           initial_capital: Number(capital),
-          binance_api_key: bnKey,
-          binance_api_secret: bnSecret,
         }),
       });
       if (!r.ok) {
@@ -163,50 +172,95 @@ export default function BotPage() {
     await fetchStatus();
   }
 
+  async function handleKillSwitch() {
+    await fetch(`${API}/api/bot/kill-switch`, { method: "POST" });
+    await fetchStatus();
+  }
+
   const isRunning  = status?.running ?? false;
   const pnlPositive = (status?.total_pnl_pct ?? 0) >= 0;
   const winRate    = status?.trade_count ? Math.round(status.win_count / status.trade_count * 100) : 0;
   const positions  = Object.values(status?.positions ?? {}) as Position[];
   const trades     = status?.trades ?? [];
+  const safetyState = status?.safety?.state;
+  const safetyBlocked = Boolean(
+    safetyState?.kill_switch || safetyState?.daily_halt || safetyState?.reconciliation_required
+  );
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="bot-layout flex h-full overflow-hidden">
 
       {/* ── 왼쪽: 설정 패널 ── */}
-      <div className="w-72 shrink-0 flex flex-col gap-3 p-4 overflow-y-auto" style={{ borderRight: "1px solid var(--card-border)" }}>
+      <div className="bot-sidebar w-72 shrink-0 flex flex-col gap-3 p-4 overflow-y-auto" style={{ borderRight: "1px solid var(--card-border)" }}>
 
         {/* 상태 헤더 */}
         <div className="flex items-center gap-2">
+          <ShieldCheck size={16} aria-hidden="true" style={{ color: "var(--accent-blue)" }} />
           <div className="w-2 h-2 rounded-full" style={{ background: isRunning ? "var(--accent-green)" : "#30363d", boxShadow: isRunning ? "0 0 6px var(--accent-green)" : "none" }} />
-          <span className="text-sm font-bold">{isRunning ? "봇 실행 중" : "봇 대기 중"}</span>
+          <span className="text-sm font-bold">{isRunning ? "Paper 봇 실행 중" : "Paper 봇 대기 중"}</span>
           {status?.circuit_breaker && (
-            <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#f8514922", color: "var(--accent-red)" }}>🛑 서킷브레이커</span>
+            <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#f8514922", color: "var(--accent-red)" }}>Kill switch</span>
           )}
+        </div>
+
+        <div className="p-3 rounded-lg text-xs flex gap-2" role="status" style={{ background: "#58a6ff14", border: "1px solid #58a6ff55" }}>
+          <ShieldCheck size={17} className="shrink-0 mt-0.5" aria-hidden="true" style={{ color: "var(--accent-blue)" }} />
+          <div>
+            <div className="font-bold" style={{ color: "var(--accent-blue)" }}>PAPER ONLY · 가상 체결</div>
+            <div className="mt-1 leading-relaxed" style={{ color: "var(--muted)" }}>
+              거래소·증권사 주문과 자격 증명 입력은 서버에서 차단됩니다.
+            </div>
+          </div>
         </div>
 
         {/* 모드 선택 */}
         <div className="flex flex-col gap-1.5">
           <div className="text-xs font-semibold" style={{ color: "var(--muted)" }}>실행 모드</div>
           <div className="grid grid-cols-2 gap-1">
-            {(["paper","live"] as const).map((m) => (
-              <button key={m} onClick={() => !isRunning && setMode(m)} disabled={isRunning}
-                className="py-2 rounded text-xs font-bold"
-                style={{
-                  background: mode === m ? (m === "paper" ? "var(--accent-blue)" : "var(--accent-red)") : "#0d1117",
-                  color: mode === m ? "#fff" : "var(--muted)",
-                  border: `1px solid ${mode === m ? (m === "paper" ? "var(--accent-blue)" : "var(--accent-red)") : "var(--card-border)"}`,
-                  opacity: isRunning ? 0.5 : 1,
-                }}>
-                {m === "paper" ? "📋 페이퍼" : "⚡ 실거래"}
-              </button>
-            ))}
+            <button type="button" disabled className="py-2 rounded text-xs font-bold flex items-center justify-center gap-1.5"
+              style={{ background: "var(--accent-blue)", color: "#fff", border: "1px solid var(--accent-blue)", opacity: 1 }}>
+              <ShieldCheck size={13} aria-hidden="true" /> Paper
+            </button>
+            <button type="button" disabled aria-describedby="live-mode-blocked"
+              className="py-2 rounded text-xs font-bold flex items-center justify-center gap-1.5 cursor-not-allowed"
+              style={{ background: "#0d1117", color: "var(--muted)", border: "1px solid var(--card-border)", opacity: 0.65 }}>
+              <LockKeyhole size={13} aria-hidden="true" /> Live 차단
+            </button>
           </div>
-          {mode === "live" && (
-            <div className="p-2 rounded text-xs" style={{ background: "#f8514911", color: "var(--accent-red)", border: "1px solid #f8514933" }}>
-              ⚠️ 실제 자금으로 매매됩니다. 소액으로 먼저 테스트하세요.
-            </div>
-          )}
+          <div id="live-mode-blocked" className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
+            Live는 법무·보안 승인 전까지 이중 확인 여부와 관계없이 사용할 수 없습니다.
+          </div>
         </div>
+
+        {safetyBlocked && (
+          <div className="p-3 rounded text-xs flex gap-2" role="alert" style={{ background: "#f8514915", color: "var(--accent-red)", border: "1px solid #f8514955" }}>
+            <TriangleAlert size={16} className="shrink-0" aria-hidden="true" />
+            <span>{safetyState?.halt_reason || "안전 상태가 paper 주문을 차단했습니다."}</span>
+          </div>
+        )}
+
+        {/* 실행 중에도 kill switch가 첫 화면에 보이도록 핵심 제어를 상단에 둔다. */}
+        {!isRunning ? (
+          <button onClick={handleStart} disabled={starting || symbols.length === 0 || safetyBlocked}
+            className="py-3 rounded font-bold text-sm flex items-center justify-center gap-2"
+            style={{ background: "var(--accent-blue)", color: "#fff", opacity: starting || symbols.length === 0 || safetyBlocked ? 0.55 : 1 }}>
+            <Play size={15} fill="currentColor" aria-hidden="true" />
+            {starting ? "시작 중…" : "Paper 시뮬레이션 시작"}
+          </button>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={handleStop}
+              className="py-3 rounded font-bold text-sm flex items-center justify-center gap-2"
+              style={{ background: "#30363d", color: "var(--foreground)", border: "1px solid var(--card-border)" }}>
+              <Square size={13} fill="currentColor" aria-hidden="true" /> 정지
+            </button>
+            <button onClick={handleKillSwitch}
+              className="py-3 rounded font-bold text-sm flex items-center justify-center gap-2"
+              style={{ background: "#f8514922", color: "var(--accent-red)", border: "1px solid #f8514966" }}>
+              <OctagonX size={15} aria-hidden="true" /> Kill switch
+            </button>
+          </div>
+        )}
 
         {/* 전략 */}
         <div className="flex flex-col gap-1.5">
@@ -251,60 +305,43 @@ export default function BotPage() {
           <input value={Number(capital).toLocaleString()}
             onChange={(e) => !isRunning && setCapital(e.target.value.replace(/[^0-9]/g, ""))}
             disabled={isRunning}
+            aria-label="Paper 초기 자본"
+            inputMode="numeric"
             className="px-3 py-2 rounded text-sm outline-none"
             style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)", opacity: isRunning ? 0.6 : 1 }} />
         </div>
 
-        {/* Binance API (live 모드) */}
-        {mode === "live" && (
-          <div className="flex flex-col gap-1.5">
-            <div className="text-xs font-semibold" style={{ color: "var(--muted)" }}>Binance API (Read + Trade)</div>
-            <input value={bnKey} onChange={(e) => setBnKey(e.target.value)} disabled={isRunning}
-              placeholder="API Key" className="px-3 py-1.5 rounded text-xs outline-none"
-              style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }} />
-            <input value={bnSecret} onChange={(e) => setBnSecret(e.target.value)} disabled={isRunning}
-              type="password" placeholder="API Secret" className="px-3 py-1.5 rounded text-xs outline-none"
-              style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }} />
-          </div>
-        )}
-
         {/* 리스크 안내 */}
         <div className="p-2 rounded text-xs flex flex-col gap-0.5" style={{ background: "var(--card)", border: "1px solid var(--card-border)", color: "var(--muted)" }}>
-          <div className="font-semibold text-xs mb-1">⚙️ 리스크 관리 (자동 적용)</div>
+          <div className="font-semibold text-xs mb-1 flex items-center gap-1.5" style={{ color: "var(--foreground)" }}><Gauge size={14} aria-hidden="true" /> 영속 리스크 가드</div>
           <div>• 포지션 한도: 자산의 최대 20%</div>
-          <div>• 일일 손실 한도: -2% 초과 시 당일 거래 중단</div>
-          <div>• 최대 낙폭 차단: -10% 초과 시 봇 자동 정지</div>
-          <div>• Kelly Criterion (반 켈리) 포지션 사이징</div>
+          <div>• 일일 손실 -2%: UTC 당일 중단</div>
+          <div>• 최대 낙폭 -10%: kill switch 영속</div>
+          <div>• 중복 주문 키·비정상 재시작 차단</div>
         </div>
 
-        {/* 시작/정지 버튼 */}
-        {!isRunning ? (
-          <button onClick={handleStart} disabled={starting || symbols.length === 0}
-            className="py-3 rounded font-bold text-sm"
-            style={{ background: mode === "live" ? "var(--accent-red)" : "var(--accent-green)", color: "#fff", opacity: starting || symbols.length === 0 ? 0.6 : 1 }}>
-            {starting ? "시작 중…" : mode === "live" ? "⚡ 실거래 시작" : "▶ 페이퍼 트레이딩 시작"}
-          </button>
-        ) : (
-          <button onClick={handleStop}
-            className="py-3 rounded font-bold text-sm"
-            style={{ background: "#30363d", color: "var(--accent-red)", border: "1px solid var(--accent-red)44" }}>
-            ⏹ 봇 정지
-          </button>
-        )}
       </div>
 
       {/* ── 오른쪽: 모니터링 ── */}
-      <div className="flex-1 flex flex-col gap-3 p-4 overflow-y-auto">
+      <div className="bot-monitor flex-1 flex flex-col gap-3 p-4 overflow-y-auto">
+
+        <div className="flex items-start justify-between gap-3 p-3 rounded-lg" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
+          <div>
+            <div className="text-xs font-bold" style={{ color: "var(--accent-blue)" }}>PAPER EXECUTION LEDGER</div>
+            <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>아래 신호·포지션·손익은 모두 가상 체결 결과이며 실제 계좌 상태가 아닙니다.</div>
+          </div>
+          <span className="shrink-0 text-xs px-2 py-1 rounded font-semibold" style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}>LIVE OFF</span>
+        </div>
 
         {/* 에러 배너 */}
         {status?.error && (
-          <div className="px-3 py-2 rounded text-xs" style={{ background: "#f8514922", color: "var(--accent-red)", border: "1px solid #f8514944" }}>
-            ⚠️ {status.error}
+          <div className="px-3 py-2 rounded text-xs flex items-center gap-2" role="alert" style={{ background: "#f8514922", color: "var(--accent-red)", border: "1px solid #f8514944" }}>
+            <TriangleAlert size={14} aria-hidden="true" /> {status.error}
           </div>
         )}
 
         {/* KPI */}
-        <div className="grid grid-cols-4 gap-2">
+        <div className="bot-kpi-grid grid grid-cols-4 gap-2">
           <StatCard label="총 손익" value={`${pnlPositive ? "+" : ""}${status?.total_pnl_pct?.toFixed(2) ?? "0.00"}%`}
             color={pnlPositive ? "var(--accent-green)" : "var(--accent-red)"}
             sub={`${fmtMoney(status?.total_pnl ?? 0)}원`} />

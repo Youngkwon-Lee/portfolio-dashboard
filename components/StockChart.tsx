@@ -64,7 +64,7 @@ export default function StockChart() {
             </span>
             {livePrice && (
               <span className="text-xs ml-2 px-1 rounded" style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}>
-                LIVE
+                실시간 시세
               </span>
             )}
           </div>

@@ -22,15 +22,39 @@ body {
   margin: 0;
 }
 
+button, input, select {
+  min-height: 36px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
 
 /* ── 모바일 반응형 ── */
 @media (max-width: 768px) {
+  .app-nav { flex-wrap: wrap; }
+
   /* 네비 탭 스크롤 */
-  .nav-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .nav-tabs { order: 3; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .nav-tabs::-webkit-scrollbar { display: none; }
+
+  .bot-layout { flex-direction: column; overflow-y: auto; }
+  .bot-sidebar { width: 100% !important; overflow: visible !important; border-right: none !important; border-bottom: 1px solid var(--card-border); }
+  .bot-monitor { overflow: visible !important; flex: none !important; }
+  .bot-kpi-grid, .backtest-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .backtest-config { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .backtest-run { grid-column: span 2 / span 2 !important; }
 
   /* 사이드 패널 → 전체 너비 */
   .sidebar { width: 100% !important; border-right: none !important; border-bottom: 1px solid var(--card-border); }
@@ -51,6 +75,10 @@ body {
 }
 
 @media (max-width: 480px) {
+  .paper-global-badge { font-size: 10px !important; padding-left: 8px !important; padding-right: 8px !important; }
+  .backtest-config { grid-template-columns: 1fr !important; }
+  .backtest-run { grid-column: span 1 / span 1 !important; }
+  .bot-kpi-grid { grid-template-columns: 1fr !important; }
   .kpi-grid-4 { grid-template-columns: 1fr 1fr !important; }
   .hide-mobile { display: none !important; }
 }

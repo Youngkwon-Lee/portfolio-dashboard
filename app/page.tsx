@@ -11,6 +11,7 @@ import BacktestPage from "@/components/BacktestPage";
 import SettingsPage from "@/components/SettingsPage";
 import BotPage from "@/components/BotPage";
 import OptimizerPage from "@/components/OptimizerPage";
+import { ShieldCheck, TrendingUp } from "lucide-react";
 
 type Tab = "대시보드" | "종목 검색" | "백테스트" | "최적화" | "자동매매" | "설정";
 const TABS: Tab[] = ["대시보드", "종목 검색", "백테스트", "최적화", "자동매매", "설정"];
@@ -26,10 +27,11 @@ export default function Dashboard() {
       {/* Header nav */}
       <div
         style={{ borderBottom: "1px solid var(--card-border)", background: "#0d1117" }}
-        className="flex items-center justify-between px-4 py-2 shrink-0"
+        className="app-nav flex items-center justify-between px-4 py-2 shrink-0 gap-3"
       >
         <div className="flex items-center gap-2">
-          <span className="font-bold text-sm tracking-tight">📈 PortfolioAI</span>
+          <TrendingUp size={17} aria-hidden="true" style={{ color: "var(--accent-blue)" }} />
+          <span className="font-bold text-sm tracking-tight">PortfolioAI</span>
           <span
             className="text-xs px-2 py-0.5 rounded"
             style={{ background: "var(--accent-blue)22", color: "var(--accent-blue)", border: "1px solid var(--accent-blue)44" }}
@@ -43,6 +45,7 @@ export default function Dashboard() {
             <button
               key={t}
               onClick={() => setTab(t)}
+              aria-current={tab === t ? "page" : undefined}
               className="px-3 py-1 rounded transition-colors whitespace-nowrap"
               style={{
                 background: tab === t ? "var(--card)" : "transparent",
@@ -55,12 +58,12 @@ export default function Dashboard() {
           ))}
         </div>
 
-        <button
-          className="text-xs px-3 py-1 rounded font-semibold"
-          style={{ background: "var(--accent-blue)", color: "#fff" }}
+        <span
+          className="paper-global-badge text-xs px-3 py-1 rounded font-semibold whitespace-nowrap flex items-center gap-1.5"
+          style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}
         >
-          KIS 연결됨 ✓
-        </button>
+          <ShieldCheck size={13} aria-hidden="true" /> PAPER ONLY · LIVE 차단
+        </span>
       </div>
 
       {/* 탭 콘텐츠 */}

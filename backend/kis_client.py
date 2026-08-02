@@ -1,21 +1,17 @@
 """
 KIS (한국투자증권) Open API 클라이언트
-모의투자: https://openapivts.koreainvestment.com:29443
-실투자:   https://openapi.koreainvestment.com:9443
+MVP 정책: 모의투자(VTS) 조회만 허용하며 계좌·주문 경로는 차단한다.
 """
 import os
 import time
 import httpx
 from dotenv import load_dotenv
+from trading_safety import LiveTradingBlocked
 
 load_dotenv()
 
-ENV = os.getenv("KIS_ENV", "vts")
-BASE_URL = (
-    "https://openapivts.koreainvestment.com:29443"
-    if ENV == "vts"
-    else "https://openapi.koreainvestment.com:9443"
-)
+ENV = "vts"
+BASE_URL = "https://openapivts.koreainvestment.com:29443"
 
 APP_KEY = os.getenv("KIS_APP_KEY", "")
 APP_SECRET = os.getenv("KIS_APP_SECRET", "")
@@ -62,24 +58,6 @@ async def _get(path: str, tr_id: str, params: dict) -> dict:
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{BASE_URL}{path}", headers=headers, params=params, timeout=10
-        )
-        resp.raise_for_status()
-        return resp.json()
-
-
-async def _post(path: str, tr_id: str, body: dict) -> dict:
-    """KIS REST POST 요청 공통 헬퍼."""
-    token = await get_access_token()
-    headers = {
-        "authorization": f"Bearer {token}",
-        "appkey": APP_KEY,
-        "appsecret": APP_SECRET,
-        "tr_id": tr_id,
-        "content-type": "application/json; charset=utf-8",
-    }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{BASE_URL}{path}", headers=headers, json=body, timeout=10
         )
         resp.raise_for_status()
         return resp.json()
@@ -142,47 +120,8 @@ async def get_daily_chart(ticker: str, start: str, end: str) -> list[dict]:
 # ──────────────────────────────────────────────
 
 async def get_balance() -> dict:
-    """잔고 조회 (모의투자)."""
-    tr_id = "VTTC8434R" if ENV == "vts" else "TTTC8434R"
-    data = await _get(
-        "/uapi/domestic-stock/v1/trading/inquire-balance",
-        tr_id=tr_id,
-        params={
-            "CANO": ACCOUNT_NO,
-            "ACNT_PRDT_CD": ACCOUNT_PROD,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "02",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        },
-    )
-    holdings = [
-        {
-            "ticker": h["pdno"],
-            "name": h["prdt_name"],
-            "qty": int(h["hldg_qty"]),
-            "avg_cost": float(h["pchs_avg_pric"]),
-            "current_price": int(h["prpr"]),
-            "value": int(h["evlu_amt"]),
-            "return_pct": float(h["evlu_pfls_rt"]),
-        }
-        for h in data.get("output1", [])
-        if int(h.get("hldg_qty", 0)) > 0
-    ]
-    summary = data.get("output2", [{}])[0]
-    return {
-        "holdings": holdings,
-        "total_value": int(summary.get("tot_evlu_amt", 0)),
-        "total_cost": int(summary.get("pchs_amt_smtl_amt", 0)),
-        "cash": int(summary.get("dnca_tot_amt", 0)),
-        "pnl": int(summary.get("evlu_pfls_smtl_amt", 0)),
-        "pnl_pct": float(summary.get("evlu_pfls_smtl_rt", 0)),
-    }
+    """Authenticated account access is outside the paper MVP boundary."""
+    raise LiveTradingBlocked("KIS 계좌 인증 조회는 paper MVP에서 차단됩니다.")
 
 
 # ──────────────────────────────────────────────
@@ -190,32 +129,5 @@ async def get_balance() -> dict:
 # ──────────────────────────────────────────────
 
 async def place_order(ticker: str, side: str, qty: int, price: int = 0) -> dict:
-    """
-    주문 실행.
-    side: 'buy' | 'sell'
-    price=0 → 시장가
-    """
-    if ENV == "vts":
-        tr_id = "VTTC0802U" if side == "buy" else "VTTC0801U"
-    else:
-        tr_id = "TTTC0802U" if side == "buy" else "TTTC0801U"
-
-    order_dvsn = "01" if price == 0 else "00"  # 01=시장가, 00=지정가
-
-    data = await _post(
-        "/uapi/domestic-stock/v1/trading/order-cash",
-        tr_id=tr_id,
-        body={
-            "CANO": ACCOUNT_NO,
-            "ACNT_PRDT_CD": ACCOUNT_PROD,
-            "PDNO": ticker,
-            "ORD_DVSN": order_dvsn,
-            "ORD_QTY": str(qty),
-            "ORD_UNPR": str(price),
-        },
-    )
-    return {
-        "order_no": data.get("output", {}).get("ODNO", ""),
-        "status": "ok" if data.get("rt_cd") == "0" else "error",
-        "message": data.get("msg1", ""),
-    }
+    """All KIS order submission is hard-blocked in this MVP."""
+    raise LiveTradingBlocked("KIS 주문 제출은 paper MVP에서 차단됩니다.")

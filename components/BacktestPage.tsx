@@ -4,6 +4,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   Legend, ReferenceLine, AreaChart, Area,
 } from "recharts";
+import { FlaskConical, Play, ShieldCheck } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -215,19 +216,28 @@ export default function BacktestPage() {
   return (
     <div className="flex flex-col h-full p-4 gap-4 overflow-y-auto">
       {/* 헤더 */}
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-bold">📊 백테스트</span>
-        <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#3fb95022", color: "var(--accent-green)", border: "1px solid #3fb95044" }}>
-          거래비용 0.15% · 무위험 3.5% · Look-ahead 제거
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <span className="text-sm font-bold flex items-center gap-2"><FlaskConical size={16} aria-hidden="true" /> 백테스트</span>
+        <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}>
+          HISTORICAL SIMULATION · 실제 주문 없음
         </span>
       </div>
 
+      <div className="p-3 rounded-lg flex gap-3" role="note" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
+        <ShieldCheck size={18} className="shrink-0" aria-hidden="true" style={{ color: "var(--accent-blue)" }} />
+        <div className="text-xs leading-relaxed">
+          <div className="font-semibold">계좌·주문 경로와 분리된 과거 데이터 시뮬레이션</div>
+          <div className="mt-0.5" style={{ color: "var(--muted)" }}>거래비용 0.15%와 무위험 수익률 3.5%를 가정합니다. 결과는 미래 수익을 보장하지 않습니다.</div>
+        </div>
+      </div>
+
       {/* 설정 */}
-      <div className="p-4 rounded-lg grid grid-cols-4 gap-3" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
+      <div className="backtest-config p-4 rounded-lg grid grid-cols-4 gap-3" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
         <div className="flex flex-col gap-1">
           <label className="text-xs" style={{ color: "var(--muted)" }}>종목</label>
           <input
             value={ticker}
+            aria-label="백테스트 종목"
             onChange={(e) => setTicker(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && run()}
             placeholder="AAPL, BTC, 005930…"
@@ -240,6 +250,8 @@ export default function BacktestPage() {
           <label className="text-xs" style={{ color: "var(--muted)" }}>초기 투자금</label>
           <input
             value={Number(initial).toLocaleString()}
+            aria-label="백테스트 초기 투자금"
+            inputMode="numeric"
             onChange={(e) => setInitial(e.target.value.replace(/[^0-9]/g, ""))}
             className="px-3 py-2 rounded text-sm outline-none"
             style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }}
@@ -265,7 +277,7 @@ export default function BacktestPage() {
 
         <div className="flex flex-col gap-1">
           <label className="text-xs" style={{ color: "var(--muted)" }}>전략</label>
-          <select value={strategy} onChange={(e) => setStrategy(e.target.value)}
+          <select value={strategy} onChange={(e) => setStrategy(e.target.value)} aria-label="백테스트 전략"
             className="px-3 py-2 rounded text-sm outline-none"
             style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }}>
             {STRATEGIES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
@@ -273,9 +285,10 @@ export default function BacktestPage() {
         </div>
 
         <button onClick={run} disabled={loading}
-          className="col-span-4 py-2.5 rounded text-sm font-bold"
+          className="backtest-run col-span-4 py-2.5 rounded text-sm font-bold flex items-center justify-center gap-2"
           style={{ background: loading ? "#30363d" : "var(--accent-blue)", color: "#fff" }}>
-          {loading ? "계산 중…" : "▶ 백테스트 실행"}
+          {!loading && <Play size={14} fill="currentColor" aria-hidden="true" />}
+          {loading ? "계산 중…" : "시뮬레이션 실행"}
         </button>
       </div>
 
@@ -288,8 +301,8 @@ export default function BacktestPage() {
 
       {/* ── 전략 비교 테이블 (all 모드) ── */}
       {response && isAll && (
-        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--card-border)" }}>
-          <table className="w-full text-xs">
+        <div className="shrink-0 rounded-lg overflow-x-auto" style={{ border: "1px solid var(--card-border)" }}>
+          <table className="w-full min-w-[760px] text-xs">
             <thead>
               <tr style={{ background: "#0d1117" }}>
                 {["전략","수익률","CAGR","Sharpe","Sortino","Calmar","MDD","거래수","비용"].map((h) => (
@@ -357,7 +370,7 @@ export default function BacktestPage() {
           </div>
 
           {/* KPI 그리드 */}
-          <div className="grid grid-cols-4 gap-2">
+          <div className="backtest-kpi-grid grid grid-cols-4 gap-2">
             <KPI label="총 수익률" value={fmt(selected.total_return_pct)} color={selected.total_return_pct >= 0 ? "var(--accent-green)" : "var(--accent-red)"}
               sub={`${fmtKRW(selected.final - selected.initial)} 손익`} />
             <KPI label="CAGR (연율)" value={fmt(selected.cagr)} color={selected.cagr >= 0 ? "var(--accent-green)" : "var(--accent-red)"} sub="연복리 수익률" />

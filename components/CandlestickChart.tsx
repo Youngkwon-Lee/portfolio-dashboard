@@ -89,7 +89,7 @@ export default function CandlestickChart() {
       ...CHART_THEME,
       width:  containerRef.current.clientWidth,
       height: 280,
-      autoSize: true,
+      autoSize: false,
     });
     chartRef.current = chart;
 
@@ -278,7 +278,7 @@ export default function CandlestickChart() {
             {livePrice && (
               <span className="text-xs px-1.5 py-0.5 rounded font-semibold"
                 style={{ background: "var(--accent-green)22", color: "var(--accent-green)", border: "1px solid var(--accent-green)44" }}>
-                LIVE
+                실시간 시세
               </span>
             )}
           </div>

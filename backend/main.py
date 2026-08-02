@@ -4,9 +4,11 @@
 """
 import os
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from dotenv import load_dotenv
 
 import kis_client as kis
@@ -18,6 +20,7 @@ import database as db
 import optimizer as opt
 import news_sentiment as news
 import upbit_client as upbit
+from trading_safety import LIVE_BLOCK_REASON, SafetyViolation
 from contextlib import asynccontextmanager
 
 load_dotenv()
@@ -27,7 +30,17 @@ async def lifespan(application):
     await db.init_db()
     yield
 
-app = FastAPI(title="Portfolio Dashboard API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Portfolio Dashboard API", version="2.1.0-paper", lifespan=lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def sanitized_validation_error(_: Request, exc: RequestValidationError):
+    """Return validation metadata without echoing potentially sensitive input."""
+    errors = [
+        {key: value for key, value in error.items() if key not in {"input", "ctx"}}
+        for error in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errors})
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,7 +67,13 @@ def detect_market(ticker: str) -> str:
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "env": os.getenv("KIS_ENV", "vts"), "version": "2.0.0"}
+    return {
+        "status": "ok",
+        "version": "2.1.0-paper",
+        "execution_mode": "paper",
+        "live_allowed": False,
+        "kis_environment": "vts",
+    }
 
 
 @app.get("/ping")
@@ -135,10 +154,10 @@ async def get_multiple_prices(
 
 @app.get("/api/balance")
 async def get_balance():
-    try:
-        return await kis.get_balance()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    raise HTTPException(
+        status_code=403,
+        detail="KIS 계좌 인증 조회는 paper MVP에서 차단됩니다.",
+    )
 
 
 # ──────────────────────────────────────────────
@@ -154,16 +173,7 @@ class OrderRequest(BaseModel):
 
 @app.post("/api/order")
 async def place_order(req: OrderRequest):
-    if req.side not in ("buy", "sell"):
-        raise HTTPException(status_code=400, detail="side must be 'buy' or 'sell'")
-    if req.qty <= 0:
-        raise HTTPException(status_code=400, detail="qty must be > 0")
-    if detect_market(req.ticker) != "KRX":
-        raise HTTPException(status_code=400, detail="현재 국내 주식(KRX)만 주문 가능합니다")
-    try:
-        return await kis.place_order(req.ticker, req.side, req.qty, req.price)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    raise HTTPException(status_code=403, detail=LIVE_BLOCK_REASON)
 
 
 # ──────────────────────────────────────────────
@@ -244,12 +254,18 @@ import claude_client as ai
 # ──────────────────────────────────────────────
 
 class BotConfig(BaseModel):
-    mode:            str   = "paper"          # paper | live
+    model_config = ConfigDict(extra="forbid")
+
+    mode:            str   = "paper"
     strategy:        str   = "dual_mom"
-    symbols:         list[str] = ["BTC", "ETH"]
+    symbols:         list[str] = Field(default_factory=lambda: ["BTC", "ETH"])
     initial_capital: float = 1_000_000
-    binance_api_key:    str = ""
-    binance_api_secret: str = ""
+
+
+class SafetyConfirmation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: str
 
 
 @app.get("/api/bot/daily-pnl")
@@ -303,12 +319,10 @@ async def upbit_chart(market: str, period: str = Query("1M", pattern="^(1M|3M|6M
 
 @app.get("/api/upbit/balance")
 async def upbit_balance():
-    try:
-        return await upbit.get_balance()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    raise HTTPException(
+        status_code=403,
+        detail="Upbit 계좌 인증 조회는 paper MVP에서 차단됩니다.",
+    )
 
 
 # ──────────────────────────────────────────────
@@ -316,14 +330,16 @@ async def upbit_balance():
 # ──────────────────────────────────────────────
 
 @app.get("/api/compare/{ticker}")
-async def compare_bt_live(
+async def compare_backtest_to_paper(
     ticker:   str,
     strategy: str  = Query("dual_mom"),
     period:   str  = Query("1M", pattern="^(1M|3M|6M|1Y)$"),
     initial:  float = Query(1_000_000),
 ):
-    """백테스트 이론 성과 vs 실제 봇 매매 내역 비교."""
+    """백테스트 이론 성과 vs paper 봇 시뮬레이션 내역 비교."""
     # 백테스트
+    bars: list[bt.Bar] = []
+    bt_result = None
     try:
         chart = await get_chart(ticker, period)
         candles = chart.get("candles", []) if isinstance(chart, dict) else []
@@ -337,27 +353,29 @@ async def compare_bt_live(
     except Exception as e:
         bt_curve = []
 
-    # 실거래 내역
-    live_trades = await db.load_trades(100, ticker)
+    # paper 시뮬레이션 내역
+    paper_trades = await db.load_trades(100, ticker)
     daily_pnl   = await db.load_daily_pnl(30)
 
-    # 실거래 누적 PnL 곡선
-    live_curve = []
+    # paper 누적 PnL 곡선
+    paper_curve = []
     cumulative = 0.0
-    for t in reversed(live_trades):
+    for t in reversed(paper_trades):
         cumulative += t.get("pnl", 0)
-        live_curve.append({"date": t["timestamp"][:10], "cumPnl": round(cumulative, 0)})
+        paper_curve.append({"date": t["timestamp"][:10], "cumPnl": round(cumulative, 0)})
 
     return {
         "ticker":       ticker.upper(),
         "strategy":     strategy,
         "bt_curve":     bt_curve,
-        "bt_return":    bt_result.total_return_pct if bars else 0,
-        "bt_sharpe":    bt_result.sharpe if bars else 0,
-        "live_trades":  live_trades[:20],
-        "live_curve":   live_curve,
+        "bt_return":    bt_result.total_return_pct if bt_result else 0,
+        "bt_sharpe":    bt_result.sharpe if bt_result else 0,
+        "execution_mode": "paper",
+        "live_allowed": False,
+        "paper_trades": paper_trades[:20],
+        "paper_curve":  paper_curve,
         "daily_pnl":    daily_pnl,
-        "live_stats":   await db.get_trade_stats(),
+        "paper_stats":  await db.get_trade_stats(),
     }
 
 
@@ -390,11 +408,26 @@ async def optimize_portfolio(req: OptimizeRequest):
 
 @app.post("/api/bot/start")
 async def bot_start(cfg: BotConfig):
-    if cfg.mode == "live" and (not cfg.binance_api_key or not cfg.binance_api_secret):
-        raise HTTPException(status_code=400, detail="LIVE 모드는 Binance API 키 필수")
-    bot.configure(cfg.mode, cfg.strategy, cfg.symbols, cfg.initial_capital)
-    await bot.start(cfg.binance_api_key, cfg.binance_api_secret)
-    return {"ok": True, "mode": cfg.mode, "strategy": cfg.strategy}
+    if cfg.mode != "paper":
+        raise HTTPException(status_code=403, detail=LIVE_BLOCK_REASON)
+    if not cfg.symbols:
+        raise HTTPException(status_code=400, detail="최소 한 개 종목이 필요합니다.")
+    if cfg.initial_capital <= 0:
+        raise HTTPException(status_code=400, detail="초기 자본은 0보다 커야 합니다.")
+    try:
+        bot.configure("paper", cfg.strategy, cfg.symbols, cfg.initial_capital)
+        await bot.start()
+    except SafetyViolation as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return {
+        "ok": True,
+        "execution_mode": "paper",
+        "live_allowed": False,
+        "strategy": cfg.strategy,
+    }
 
 
 @app.post("/api/bot/stop")
@@ -412,6 +445,41 @@ async def bot_status():
 async def bot_trades():
     s = bot.get_status()
     return {"trades": s.get("trades", [])}
+
+
+@app.get("/api/trading/safety")
+async def trading_safety():
+    return bot.get_safety_contract()
+
+
+@app.post("/api/bot/kill-switch")
+async def bot_kill_switch():
+    await bot.activate_kill_switch()
+    return {"ok": True, "safety": bot.get_safety_contract()}
+
+
+@app.post("/api/bot/reconcile")
+async def bot_reconcile(payload: SafetyConfirmation):
+    try:
+        bot.acknowledge_reconciliation(payload.confirmation)
+    except SafetyViolation as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return {"ok": True, "safety": bot.get_safety_contract()}
+
+
+@app.post("/api/bot/safety-reset")
+async def bot_safety_reset(payload: SafetyConfirmation):
+    try:
+        bot.reset_kill_switch(payload.confirmation)
+    except SafetyViolation as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    return {"ok": True, "safety": bot.get_safety_contract()}
 
 
 # ──────────────────────────────────────────────
@@ -505,31 +573,20 @@ async def get_metamask(address: str):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-class BinanceCredentials(BaseModel):
-    api_key: str
-    api_secret: str
-
-
 @app.post("/api/wallet/binance")
-async def get_binance(creds: BinanceCredentials):
-    """바이낸스 현물 계좌 잔고."""
-    try:
-        return await wallet.get_binance_balance(creds.api_key, creds.api_secret)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+async def get_binance():
+    raise HTTPException(
+        status_code=403,
+        detail="Binance 자격 증명 입력과 계좌 조회는 paper MVP에서 차단됩니다.",
+    )
 
 
 @app.get("/api/wallet/binance")
 async def get_binance_env():
-    """바이낸스 잔고 — .env 키 사용."""
-    try:
-        return await wallet.get_binance_balance()
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    raise HTTPException(
+        status_code=403,
+        detail="Binance 인증 계좌 조회는 paper MVP에서 차단됩니다.",
+    )
 
 class PortfolioPayload(BaseModel):
     holdings: list[dict]

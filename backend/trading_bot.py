@@ -3,7 +3,7 @@
 ────────────────────────────────────────────────────
 실행 모드
   PAPER  : 가상 실행 (기본값, 실제 주문 없음)
-  LIVE   : Binance 실주문 (명시적 활성화 필요)
+  LIVE   : 정책상 차단 (법무·보안 검토 전까지 활성화 불가)
 
 리스크 관리
   - Kelly Criterion  : 최적 포지션 크기 계산
@@ -20,10 +20,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
+import math
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
@@ -34,6 +34,7 @@ import httpx
 import backtest_engine as bt
 import database as db
 import notifier
+from trading_safety import SafetyController, SafetyViolation
 from us_client import get_crypto_chart, get_crypto_price
 
 logger = logging.getLogger("trading_bot")
@@ -47,6 +48,9 @@ DAILY_LOSS_LIMIT   = 0.02   # 일일 손실 한도 2%
 MAX_DRAWDOWN_STOP  = 0.10   # 최대 낙폭 10% → 봇 정지
 KELLY_FRACTION     = 0.5    # 반 켈리 (Thorp 1997)
 COMMISSION         = 0.0010 # Binance 현물 0.10% (BNB 할인 미적용)
+ALLOWED_STRATEGIES = frozenset({
+    "ensemble", "dual_mom", "sma_cross", "bollinger", "rsi", "bah"
+})
 
 # ── 리스크 파라미터 ───────────────────────────────
 STOP_LOSS_PCT      = 0.05   # 진입가 대비 -5% 손절
@@ -54,8 +58,6 @@ TAKE_PROFIT_PCT    = 0.15   # 진입가 대비 +15% 익절
 DCA_THRESHOLD_PCT  = 0.03   # -3% 추가 하락 시 DCA 매수
 DCA_MAX_TIMES      = 2      # DCA 최대 2회
 DCA_SIZE_PCT       = 0.5    # DCA 시 기존 포지션의 50% 추가
-
-BINANCE_BASE = "https://api.binance.com"
 
 # ── 캐시 (CoinGecko 429 방지) ─────────────────────
 # 차트: 30분 TTL (신호는 1시간 단위라 충분)
@@ -115,6 +117,7 @@ class BotStatus:
     symbols:          list[str]  = field(default_factory=lambda: ["BTC", "ETH"])
     initial_capital:  float      = 1_000_000
     current_capital:  float      = 1_000_000
+    equity_capital:   float      = 1_000_000
     peak_capital:     float      = 1_000_000
     daily_start_cap:  float      = 1_000_000
     positions:        dict       = field(default_factory=dict)
@@ -128,6 +131,7 @@ class BotStatus:
     last_run:         str        = ""
     error:            str        = ""
     circuit_breaker:  bool       = False   # True = 거래 중단
+    session_id:       str        = ""
     trades:           list       = field(default_factory=list)
 
 
@@ -135,34 +139,20 @@ class BotStatus:
 
 _status = BotStatus()
 _task: Optional[asyncio.Task] = None
+_safety = SafetyController()
 
 
 def get_status() -> dict:
-    return asdict(_status)
-
-
-# ── Binance 주문 ──────────────────────────────────
-
-async def _binance_order(symbol: str, side: str, qty: float, api_key: str, api_secret: str) -> dict:
-    """Binance 현물 시장가 주문."""
-    import hmac, hashlib
-    ts = int(time.time() * 1000)
-    params = f"symbol={symbol}USDT&side={side}&type=MARKET&quantity={qty:.6f}&timestamp={ts}"
-    sig = hmac.new(api_secret.encode(), params.encode(), hashlib.sha256).hexdigest()
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            f"{BINANCE_BASE}/api/v3/order",
-            params=params + f"&signature={sig}",
-            headers={"X-MBX-APIKEY": api_key},
-        )
-        resp.raise_for_status()
-        return resp.json()
+    status = asdict(_status)
+    status["safety"] = _safety.contract()
+    status["live_allowed"] = False
+    return status
 
 
 async def _binance_price(symbol: str) -> float:
     """Binance 현재가 조회."""
     async with httpx.AsyncClient(timeout=5) as client:
-        resp = await client.get(f"{BINANCE_BASE}/api/v3/ticker/price", params={"symbol": f"{symbol}USDT"})
+        resp = await client.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": f"{symbol}USDT"})
         resp.raise_for_status()
         return float(resp.json()["price"])
 
@@ -191,22 +181,39 @@ def kelly_position_size(
     return capital * capped
 
 
-def check_risk(status: BotStatus) -> tuple[bool, str]:
-    """리스크 체크. (통과여부, 사유)"""
-    # 서킷 브레이커 (최대 낙폭)
-    if status.peak_capital > 0:
-        dd = (status.peak_capital - status.current_capital) / status.peak_capital
-        status.drawdown_pct = dd * 100
-        if dd >= MAX_DRAWDOWN_STOP:
-            status.circuit_breaker = True
-            return False, f"최대 낙폭 {dd*100:.1f}% 초과 → 봇 자동 정지"
+def _estimated_equity(status: BotStatus) -> float:
+    position_value = sum(
+        float(position.get("current_price", position.get("avg_price", 0)))
+        * float(position.get("qty", 0))
+        for position in status.positions.values()
+    )
+    return status.current_capital + position_value
 
-    # 일일 손실 한도
+
+def check_risk(status: BotStatus) -> tuple[bool, str]:
+    """Run persisted risk checks against total simulated equity, not cash."""
+    equity = _estimated_equity(status)
+    status.equity_capital = equity
+    if status.peak_capital > 0:
+        status.drawdown_pct = max(
+            0.0, (status.peak_capital - equity) / status.peak_capital * 100
+        )
     if status.daily_start_cap > 0:
-        daily_loss = (status.daily_start_cap - status.current_capital) / status.daily_start_cap
-        status.daily_pnl_pct = -daily_loss * 100
-        if daily_loss >= DAILY_LOSS_LIMIT:
-            return False, f"일일 손실 {daily_loss*100:.1f}% 한도 초과 → 오늘 거래 중단"
+        status.daily_pnl_pct = (equity - status.daily_start_cap) / status.daily_start_cap * 100
+
+    try:
+        _safety.assert_can_trade(status.mode)
+        _safety.evaluate_capital(
+            equity,
+            status.daily_start_cap,
+            status.peak_capital,
+            daily_loss_limit=DAILY_LOSS_LIMIT,
+            max_drawdown_limit=MAX_DRAWDOWN_STOP,
+        )
+        _safety.assert_can_trade(status.mode)
+    except SafetyViolation as exc:
+        status.circuit_breaker = _safety.state.kill_switch
+        return False, str(exc)
 
     return True, ""
 
@@ -373,15 +380,29 @@ async def generate_signal(symbol: str, strategy: str) -> tuple[Signal, dict]:
 
 # ── 주문 실행 ─────────────────────────────────────
 
+async def _persist_trade_or_reconcile(trade: Trade, status: BotStatus) -> bool:
+    """Commit the paper ledger before mutating memory, failing closed on doubt."""
+    try:
+        inserted = await db.save_trade(asdict(trade))
+    except Exception as exc:
+        reason = "paper 체결 원장 저장 결과를 확인할 수 없어 상태 대사가 필요합니다."
+        _safety.require_reconciliation(reason)
+        status.error = reason
+        raise SafetyViolation("ledger_persistence_failed", reason) from exc
+    return inserted is not False
+
+
 async def execute_order(
     symbol:     str,
     signal:     Signal,
     price:      float,
     status:     BotStatus,
-    api_key:    str = "",
-    api_secret: str = "",
+    order_key:  str = "",
 ) -> Optional[Trade]:
-    """신호에 따라 포지션 진입/청산."""
+    """Apply a deduplicated order to the simulated paper ledger only."""
+    _safety.assert_can_trade(status.mode)
+    if not math.isfinite(price) or price <= 0:
+        raise SafetyViolation("invalid_price", "paper 체결 가격은 0보다 큰 유한수여야 합니다.")
     ts = datetime.now(timezone.utc).isoformat()
     pos = status.positions.get(symbol)
 
@@ -399,34 +420,31 @@ async def execute_order(
         if invest < 1:
             return None
 
-        if status.mode == BotMode.LIVE and api_key and api_secret:
-            qty = invest / price
-            try:
-                await _binance_order(symbol, "BUY", qty, api_key, api_secret)
-            except Exception as e:
-                logger.error(f"Binance 주문 실패: {e}")
-                return None
+        if not _safety.reserve_order(order_key, status.mode):
+            logger.warning("중복 paper 주문 차단: %s", order_key)
+            return None
 
         qty = invest / price
         cost = invest * COMMISSION
+        trade = Trade(
+            id=f"paper-{uuid.uuid5(uuid.NAMESPACE_URL, order_key)}", symbol=symbol, side="BUY",
+            qty=qty, price=price, cost=cost, mode=status.mode,
+            strategy=status.strategy, timestamp=ts,
+        )
+        if not await _persist_trade_or_reconcile(trade, status):
+            logger.warning("중복 paper 원장 체결 차단: %s", order_key)
+            return None
+
         status.current_capital -= (invest + cost)
         status.positions[symbol] = {
             "symbol": symbol, "qty": qty, "avg_price": price,
             "entry_time": ts, "invest": invest,
         }
-
-        trade = Trade(
-            id=f"{symbol}-{int(time.time())}", symbol=symbol, side="BUY",
-            qty=qty, price=price, cost=cost, mode=status.mode,
-            strategy=status.strategy, timestamp=ts,
-        )
         status.trades.insert(0, asdict(trade))
         if len(status.trades) > 200:
             status.trades = status.trades[:200]
         status.trade_count += 1
         logger.info(f"[{status.mode}] BUY {symbol} @ {price:,.2f}  qty={qty:.6f}  invest={invest:,.0f}")
-        # DB 저장 + 텔레그램 알림
-        await db.save_trade(asdict(trade))
         await notifier.notify_trade("BUY", symbol, price, qty, invest, status.mode)
         return trade
 
@@ -438,31 +456,29 @@ async def execute_order(
         pnl   = proceeds - pos["invest"] - cost
         pnl_pct = pnl / pos["invest"] * 100
 
-        if status.mode == BotMode.LIVE and api_key and api_secret:
-            try:
-                await _binance_order(symbol, "SELL", qty, api_key, api_secret)
-            except Exception as e:
-                logger.error(f"Binance 주문 실패: {e}")
-                return None
+        if not _safety.reserve_order(order_key, status.mode):
+            logger.warning("중복 paper 주문 차단: %s", order_key)
+            return None
+
+        trade = Trade(
+            id=f"paper-{uuid.uuid5(uuid.NAMESPACE_URL, order_key)}", symbol=symbol, side="SELL",
+            qty=qty, price=price, cost=cost, mode=status.mode,
+            strategy=status.strategy, timestamp=ts,
+            pnl=pnl, pnl_pct=pnl_pct,
+        )
+        if not await _persist_trade_or_reconcile(trade, status):
+            logger.warning("중복 paper 원장 체결 차단: %s", order_key)
+            return None
 
         status.current_capital += proceeds - cost
         del status.positions[symbol]
         if pnl > 0:
             status.win_count += 1
-
-        trade = Trade(
-            id=f"{symbol}-{int(time.time())}", symbol=symbol, side="SELL",
-            qty=qty, price=price, cost=cost, mode=status.mode,
-            strategy=status.strategy, timestamp=ts,
-            pnl=pnl, pnl_pct=pnl_pct,
-        )
         status.trades.insert(0, asdict(trade))
         if len(status.trades) > 200:
             status.trades = status.trades[:200]
         status.trade_count += 1
         logger.info(f"[{status.mode}] SELL {symbol} @ {price:,.2f}  PnL={pnl:+,.0f} ({pnl_pct:+.2f}%)")
-        # DB 저장 + 텔레그램 알림
-        await db.save_trade(asdict(trade))
         await notifier.notify_trade("SELL", symbol, price, qty, pos["invest"], status.mode, pnl, pnl_pct)
         return trade
 
@@ -475,8 +491,7 @@ async def check_sl_tp_dca(
     symbol: str,
     price: float,
     status: BotStatus,
-    api_key: str = "",
-    api_secret: str = "",
+    cycle_key: str,
 ) -> Optional[str]:
     """
     포지션 보유 중 매 루프에서 호출.
@@ -496,14 +511,22 @@ async def check_sl_tp_dca(
     # ── Take-Profit ──
     if chg >= TAKE_PROFIT_PCT:
         logger.info(f"[TP] {symbol} +{chg*100:.1f}% → 익절")
-        await execute_order(symbol, Signal.SELL, price, status, api_key, api_secret)
+        trade = await execute_order(
+            symbol, Signal.SELL, price, status, f"{cycle_key}:take-profit"
+        )
+        if trade is None:
+            return None
         await notifier.send(f"🎯 *익절* `{symbol}` @ ${price:,.2f} (+{chg*100:.1f}%)")
         return "TP"
 
     # ── Stop-Loss ──
     if chg <= -STOP_LOSS_PCT:
         logger.info(f"[SL] {symbol} {chg*100:.1f}% → 손절")
-        await execute_order(symbol, Signal.SELL, price, status, api_key, api_secret)
+        trade = await execute_order(
+            symbol, Signal.SELL, price, status, f"{cycle_key}:stop-loss"
+        )
+        if trade is None:
+            return None
         await notifier.send(f"🛑 *손절* `{symbol}` @ ${price:,.2f} ({chg*100:.1f}%)")
         return "SL"
 
@@ -515,29 +538,33 @@ async def check_sl_tp_dca(
     if dca_count < DCA_MAX_TIMES and dca_drop <= -DCA_THRESHOLD_PCT:
         invest_extra = pos["invest"] * DCA_SIZE_PCT
         if invest_extra > status.current_capital * 0.05 and invest_extra >= 1:
+            order_key = f"{cycle_key}:dca:{dca_count + 1}"
+            if not _safety.reserve_order(order_key, status.mode):
+                logger.warning("중복 paper DCA 차단: %s", order_key)
+                return None
             qty_extra = invest_extra / price
             cost      = invest_extra * COMMISSION
-            status.current_capital -= (invest_extra + cost)
-
-            # 평균단가 재계산
             total_qty    = pos["qty"] + qty_extra
             total_invest = pos["invest"] + invest_extra
             new_avg      = total_invest / total_qty
 
+            trade = Trade(
+                id=f"paper-{uuid.uuid5(uuid.NAMESPACE_URL, order_key)}", symbol=symbol, side="BUY",
+                qty=qty_extra, price=price, cost=cost, mode=status.mode,
+                strategy=f"{status.strategy}[DCA#{dca_count+1}]", timestamp=ts,
+            )
+            if not await _persist_trade_or_reconcile(trade, status):
+                logger.warning("중복 paper DCA 원장 체결 차단: %s", order_key)
+                return None
+
+            status.current_capital -= (invest_extra + cost)
             pos["qty"]            = total_qty
             pos["invest"]         = total_invest
             pos["avg_price"]      = new_avg
             pos["dca_count"]      = dca_count + 1
             pos["dca_last_price"] = price
-
-            trade = Trade(
-                id=f"{symbol}-dca-{int(time.time())}", symbol=symbol, side="BUY",
-                qty=qty_extra, price=price, cost=cost, mode=status.mode,
-                strategy=f"{status.strategy}[DCA#{dca_count+1}]", timestamp=ts,
-            )
             status.trades.insert(0, asdict(trade))
             status.trade_count += 1
-            await db.save_trade(asdict(trade))
             logger.info(f"[DCA#{dca_count+1}] {symbol} @ {price:,.2f}  추가매수={invest_extra:,.0f}  새평단={new_avg:,.2f}")
             await notifier.send(
                 f"📉 *DCA #{dca_count+1}* `{symbol}` @ ${price:,.2f}\n"
@@ -550,7 +577,7 @@ async def check_sl_tp_dca(
 
 # ── 봇 메인 루프 ──────────────────────────────────
 
-async def _bot_loop(api_key: str = "", api_secret: str = ""):
+async def _bot_loop():
     global _status
     _status.running = True
     _status.error   = ""
@@ -561,6 +588,8 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
         try:
             now = datetime.now(timezone.utc)
             _status.last_run = now.isoformat()
+            cycle_key = now.strftime("%Y-%m-%dT%H:%MZ")
+            _safety.rollover_day()
 
             # 날짜 변경 시 일일 자본 리셋
             if now.hour == 0 and now.minute < 5:
@@ -571,12 +600,10 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
             if not ok:
                 logger.warning(f"리스크 차단: {reason}")
                 _status.error = reason
+                _status.running = False
                 if _status.circuit_breaker:
                     await notifier.notify_circuit_breaker(reason, _status.total_pnl_pct)
-                    _status.running = False
-                    break
-                await asyncio.sleep(300)  # 5분 대기 후 재시도
-                continue
+                break
 
             signals: dict = {}
 
@@ -591,11 +618,19 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
                     signals[sym] = {"signal": signal, "price": price, **info}
 
                     # SL / TP / DCA 먼저 체크 (포지션 있을 때)
-                    sl_tp = await check_sl_tp_dca(sym, price, _status, api_key, api_secret)
+                    sl_tp = await check_sl_tp_dca(
+                        sym, price, _status, f"{cycle_key}:{sym}"
+                    )
 
                     # SL/TP 청산 후에는 전략 신호 스킵
                     if sl_tp not in ("SL", "TP"):
-                        await execute_order(sym, signal, price, _status, api_key, api_secret)
+                        await execute_order(
+                            sym,
+                            signal,
+                            price,
+                            _status,
+                            f"{cycle_key}:{sym}:strategy:{signal.value}",
+                        )
 
                 except Exception as e:
                     logger.error(f"{sym} 처리 오류: {e}")
@@ -618,6 +653,7 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
                     total_pos_value += pos["avg_price"] * pos["qty"]
 
             total_value = _status.current_capital + total_pos_value
+            _status.equity_capital = total_value
             _status.total_pnl     = total_value - _status.initial_capital
             _status.total_pnl_pct = _status.total_pnl / _status.initial_capital * 100
             if total_value > _status.peak_capital:
@@ -634,6 +670,16 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
                 _status.total_pnl, _status.total_pnl_pct,
                 _status.trade_count, total_value,
             )
+
+            # Re-run the persisted risk gate with the latest marked-to-market equity.
+            ok, reason = check_risk(_status)
+            if not ok:
+                _status.error = reason
+                logger.warning(f"리스크 차단: {reason}")
+                if _status.circuit_breaker:
+                    await notifier.notify_circuit_breaker(reason, _status.total_pnl_pct)
+                _status.running = False
+                break
             # 자정에 일일 리포트
             if now.hour == 0 and now.minute < 2:
                 win_rate = _status.win_count / max(_status.trade_count, 1) * 100
@@ -650,9 +696,7 @@ async def _bot_loop(api_key: str = "", api_secret: str = ""):
             logger.error(f"봇 루프 오류: {e}")
             _status.error = str(e)
 
-        # 대기 (페이퍼: 60초, 실거래: 1시간)
-        interval = 60 if _status.mode == BotMode.PAPER else 3600
-        await asyncio.sleep(interval)
+        await asyncio.sleep(60)
 
     _status.running = False
     logger.info("봇 종료")
@@ -667,12 +711,25 @@ def configure(
     initial_capital: float,
 ):
     global _status
+    _safety.assert_paper_mode(mode)
+    if _status.running:
+        raise SafetyViolation("bot_already_running", "실행 중인 봇은 재설정할 수 없습니다.")
+    if strategy not in ALLOWED_STRATEGIES:
+        raise SafetyViolation("invalid_strategy", "허용되지 않은 paper 전략입니다.")
+    if not math.isfinite(initial_capital) or initial_capital <= 0:
+        raise SafetyViolation("invalid_capital", "초기 자본은 0보다 큰 유한수여야 합니다.")
+    normalized_symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
+    if not normalized_symbols or len(normalized_symbols) > 10:
+        raise SafetyViolation("invalid_symbols", "paper 종목은 1개 이상 10개 이하여야 합니다.")
+    if any(not symbol.isalpha() or len(symbol) > 10 for symbol in normalized_symbols):
+        raise SafetyViolation("invalid_symbols", "paper 종목 심볼 형식이 올바르지 않습니다.")
     _status = BotStatus(
-        mode=mode,
+        mode=BotMode.PAPER.value,
         strategy=strategy,
-        symbols=symbols,
+        symbols=normalized_symbols,
         initial_capital=initial_capital,
         current_capital=initial_capital,
+        equity_capital=initial_capital,
         peak_capital=initial_capital,
         daily_start_cap=initial_capital,
     )
@@ -722,33 +779,50 @@ async def _cmd_report() -> str:
     )
 
 
-async def start(api_key: str = "", api_secret: str = ""):
+async def start():
     global _task, _status
     if _status.running:
         return
-    # DB에서 이전 상태 복원
-    saved_capital = await db.load_state("bot_capital")
-    if saved_capital and saved_capital > 0:
-        _status.current_capital = saved_capital
-        logger.info(f"이전 자본 복원: {saved_capital:,.0f}원")
-    saved_positions = await db.load_state("bot_positions")
-    if saved_positions:
-        _status.positions = saved_positions
-        logger.info(f"이전 포지션 복원: {list(saved_positions.keys())}")
-    # DB 매매 내역 로드
-    saved_trades = await db.load_trades(200)
-    if saved_trades:
-        _status.trades = saved_trades
-        _status.trade_count = len([t for t in saved_trades if True])
-        _status.win_count   = len([t for t in saved_trades if t.get("pnl", 0) > 0 and t["side"] == "SELL"])
-    # 텔레그램 명령어 핸들러 등록
-    notifier.register_handler("/status", _cmd_status)
-    notifier.register_handler("/stop",   _cmd_stop)
-    notifier.register_handler("/report", _cmd_report)
-    notifier.start_polling()
+    _safety.assert_paper_mode(_status.mode)
+    session_id = uuid.uuid4().hex
+    _safety.start_session(session_id, _status.mode)
+    _status.session_id = session_id
+    try:
+        # DB에서 이전 paper 상태 복원
+        saved_capital = await db.load_state("bot_capital")
+        if saved_capital and saved_capital > 0:
+            _status.current_capital = saved_capital
+            logger.info(f"이전 자본 복원: {saved_capital:,.0f}원")
+        saved_positions = await db.load_state("bot_positions")
+        if saved_positions:
+            _status.positions = saved_positions
+            logger.info(f"이전 포지션 복원: {list(saved_positions.keys())}")
+        _status.equity_capital = _estimated_equity(_status)
+        # DB 매매 내역 로드
+        saved_trades = await db.load_trades(200)
+        if saved_trades:
+            _status.trades = saved_trades
+            _status.trade_count = len(saved_trades)
+            _status.win_count = len([
+                trade for trade in saved_trades
+                if trade.get("pnl", 0) > 0 and trade["side"] == "SELL"
+            ])
+        # 텔레그램 명령어 핸들러 등록
+        notifier.register_handler("/status", _cmd_status)
+        notifier.register_handler("/stop",   _cmd_stop)
+        notifier.register_handler("/report", _cmd_report)
+        notifier.start_polling()
 
-    await notifier.notify_bot_start(_status.mode, _status.strategy, _status.symbols, _status.current_capital)
-    _task = asyncio.create_task(_bot_loop(api_key, api_secret))
+        await notifier.notify_bot_start(
+            _status.mode, _status.strategy, _status.symbols, _status.current_capital
+        )
+        _status.running = True
+        _task = asyncio.create_task(_bot_loop())
+    except Exception:
+        _status.running = False
+        _status.session_id = ""
+        _safety.end_session(session_id)
+        raise
 
 
 async def stop():
@@ -761,4 +835,35 @@ async def stop():
         except asyncio.CancelledError:
             pass
     notifier.stop_polling()
-    await notifier.notify_bot_stop(_status.total_pnl, _status.total_pnl_pct, _status.trade_count)
+    try:
+        await notifier.notify_bot_stop(_status.total_pnl, _status.total_pnl_pct, _status.trade_count)
+    finally:
+        _safety.end_session(_status.session_id)
+        _status.session_id = ""
+
+
+async def activate_kill_switch() -> None:
+    """Stop the paper bot and persist a manual kill switch."""
+    if _status.running:
+        await stop()
+    _safety.trigger_kill_switch()
+    _status.circuit_breaker = True
+    _status.error = _safety.state.halt_reason
+
+
+def acknowledge_reconciliation(confirmation: str) -> None:
+    if _status.running:
+        raise SafetyViolation("bot_running", "실행 중에는 상태 대사를 확인할 수 없습니다.")
+    _safety.acknowledge_reconciliation(confirmation)
+
+
+def reset_kill_switch(confirmation: str) -> None:
+    if _status.running:
+        raise SafetyViolation("bot_running", "실행 중에는 kill switch를 해제할 수 없습니다.")
+    _safety.reset_kill_switch(confirmation)
+    _status.circuit_breaker = False
+    _status.error = _safety.state.halt_reason
+
+
+def get_safety_contract() -> dict:
+    return _safety.contract()

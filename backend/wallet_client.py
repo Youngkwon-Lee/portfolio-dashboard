@@ -2,14 +2,12 @@
 지갑 / 거래소 잔고 조회
 - Phantom (Solana)  : Solana RPC — 키 불필요
 - MetaMask (ETH)    : Etherscan API — 무료 키 (ETHERSCAN_API_KEY)
-- Binance           : Binance REST API — BINANCE_API_KEY + BINANCE_API_SECRET
+- Binance           : 인증 계좌 조회 차단 (paper MVP)
 """
 import os
-import hmac
-import hashlib
-import time
 from typing import Optional
 import httpx
+from trading_safety import LiveTradingBlocked
 
 # ──────────────────────────────────────────────
 # Solana / Phantom
@@ -156,53 +154,9 @@ async def get_metamask_balance(address: str, api_key: Optional[str] = None) -> d
 # Binance Exchange
 # ──────────────────────────────────────────────
 
-BINANCE_BASE = "https://api.binance.com"
-
-
-def _binance_signature(secret: str, params: str) -> str:
-    return hmac.new(secret.encode(), params.encode(), hashlib.sha256).hexdigest()
-
-
 async def get_binance_balance(
     api_key: Optional[str] = None,
     api_secret: Optional[str] = None,
 ) -> dict:
-    """바이낸스 현물 계좌 잔고 (0 이상 자산만)."""
-    key    = api_key    or os.getenv("BINANCE_API_KEY", "")
-    secret = api_secret or os.getenv("BINANCE_API_SECRET", "")
-
-    if not key or not secret:
-        raise ValueError("BINANCE_API_KEY / BINANCE_API_SECRET 가 설정되지 않았습니다.")
-
-    ts = int(time.time() * 1000)
-    query = f"timestamp={ts}&omitZeroBalances=true"
-    sig = _binance_signature(secret, query)
-
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"{BINANCE_BASE}/api/v3/account",
-            params={"timestamp": ts, "omitZeroBalances": "true", "signature": sig},
-            headers={"X-MBX-APIKEY": key},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-    balances = []
-    for b in data.get("balances", []):
-        free  = float(b["free"])
-        locked = float(b["locked"])
-        total = free + locked
-        if total > 0:
-            balances.append({
-                "asset": b["asset"],
-                "free": free,
-                "locked": locked,
-                "total": total,
-            })
-
-    return {
-        "exchange": "binance",
-        "account_type": "spot",
-        "balances": balances,
-        "can_trade": data.get("canTrade", False),
-    }
+    """Authenticated Binance account access is blocked in the paper MVP."""
+    raise LiveTradingBlocked("Binance 계좌 인증 조회는 paper MVP에서 차단됩니다.")

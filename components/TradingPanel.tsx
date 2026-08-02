@@ -1,6 +1,7 @@
 "use client";
 import { tradingBots, recentOrders } from "@/lib/mockData";
 import { useState } from "react";
+import { FlaskConical } from "lucide-react";
 
 export default function TradingPanel() {
   const [activeTab, setActiveTab] = useState<"bots" | "orders">("bots");
@@ -8,13 +9,13 @@ export default function TradingPanel() {
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }} className="p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold tracking-wide" style={{ color: "var(--muted)" }}>자동매매</span>
+        <span className="text-xs font-semibold tracking-wide flex items-center gap-1.5" style={{ color: "var(--muted)" }}><FlaskConical size={13} aria-hidden="true" /> Paper 자동매매</span>
         <div className="flex gap-1">
           {(["bots", "orders"] as const).map((tab) => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className="text-xs px-2 py-0.5 rounded"
               style={{ background: activeTab === tab ? "var(--accent-blue)" : "transparent", color: activeTab === tab ? "#fff" : "var(--muted)", border: "1px solid var(--card-border)" }}>
-              {tab === "bots" ? "봇 현황" : "주문 내역"}
+              {tab === "bots" ? "봇 현황" : "가상 체결 내역"}
             </button>
           ))}
         </div>
@@ -73,7 +74,7 @@ export default function TradingPanel() {
                   </td>
                   <td className="py-1.5 text-right">{o.qty}</td>
                   <td className="py-1.5 text-right">{o.price.toLocaleString("ko-KR")}</td>
-                  <td className="py-1.5 text-right" style={{ color: o.status === "체결" ? "var(--accent-green)" : "var(--accent-yellow)" }}>{o.status}</td>
+                  <td className="py-1.5 text-right" style={{ color: o.status === "체결" ? "var(--accent-blue)" : "var(--accent-yellow)" }}>{o.status === "체결" ? "가상 체결" : o.status}</td>
                 </tr>
               ))}
             </tbody>

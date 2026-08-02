@@ -12,7 +12,10 @@ import json
 import aiosqlite
 from datetime import datetime, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "portfolio.db")
+DB_PATH = os.getenv(
+    "PORTFOLIO_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "portfolio.db"),
+)
 
 
 async def init_db():
@@ -55,12 +58,19 @@ async def init_db():
 
 # ── 매매 내역 ─────────────────────────────────────
 
-async def save_trade(trade: dict):
+async def save_trade(trade: dict) -> bool:
+    """Persist a paper trade once and report whether a row was inserted.
+
+    The deterministic trade ID is the durable idempotency boundary. A replay
+    may fall outside the bounded safety-state cache, but it must never replace
+    or re-apply an existing ledger row.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            INSERT OR REPLACE INTO trades
+        cursor = await db.execute("""
+            INSERT INTO trades
             (id, symbol, side, qty, price, cost, mode, strategy, pnl, pnl_pct, timestamp)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
         """, (
             trade["id"], trade["symbol"], trade["side"],
             trade["qty"], trade["price"], trade["cost"],
@@ -69,6 +79,7 @@ async def save_trade(trade: dict):
             trade["timestamp"],
         ))
         await db.commit()
+        return cursor.rowcount == 1
 
 
 async def load_trades(limit: int = 200, symbol: str = "") -> list[dict]:

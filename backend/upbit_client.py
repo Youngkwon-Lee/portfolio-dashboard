@@ -2,48 +2,21 @@
 Upbit REST API 클라이언트
 ────────────────────────────────────────────
 공개 API  : 키 불필요 (시세, 차트)
-계좌 API  : UPBIT_ACCESS_KEY + UPBIT_SECRET_KEY 필요
-  발급: https://upbit.com/mypage/open_api_management
+계좌 API  : paper MVP 정책으로 차단
 
 지원 기능
   - KRW 마켓 전체 목록
   - 현재가 (단일/복수)
   - 일봉 차트
-  - 계좌 잔고 (인증 필요)
-  - 주문 (인증 필요)
+  - 계좌 잔고 (차단)
+  - 주문 (차단)
 """
 
-import os
-import uuid
-import hashlib
-import hmac
-import time
-import jwt
 from typing import Optional
 import httpx
+from trading_safety import LiveTradingBlocked
 
 UPBIT_BASE = "https://api.upbit.com/v1"
-
-
-def _access_key() -> str: return os.getenv("UPBIT_ACCESS_KEY", "")
-def _secret_key() -> str: return os.getenv("UPBIT_SECRET_KEY", "")
-
-
-def _auth_header(query_string: str = "") -> dict:
-    """JWT 인증 헤더 생성."""
-    payload: dict = {
-        "access_key": _access_key(),
-        "nonce":      str(uuid.uuid4()),
-    }
-    if query_string:
-        m = hashlib.sha512()
-        m.update(query_string.encode())
-        payload["query_hash"]         = m.hexdigest()
-        payload["query_hash_alg"]     = "SHA512"
-
-    token = jwt.encode(payload, _secret_key(), algorithm="HS256")
-    return {"Authorization": f"Bearer {token}"}
-
 
 # ── 공개 API (키 불필요) ──────────────────────────
 
@@ -106,59 +79,8 @@ async def get_candles(market: str, period: str = "1M") -> list[dict]:
 # ── 인증 API ──────────────────────────────────────
 
 async def get_balance() -> dict:
-    """계좌 잔고."""
-    if not _access_key():
-        raise ValueError("UPBIT_ACCESS_KEY 없음. .env에 설정 필요.")
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            f"{UPBIT_BASE}/accounts",
-            headers=_auth_header(),
-        )
-        resp.raise_for_status()
-        raw = resp.json()
-
-    holdings = []
-    total_value = 0.0
-    krw_balance = 0.0
-
-    for acc in raw:
-        currency = acc["currency"]
-        balance  = float(acc["balance"])
-        locked   = float(acc["locked"])
-        avg_buy  = float(acc["avg_buy_price"] or 0)
-
-        if currency == "KRW":
-            krw_balance = balance + locked
-            continue
-
-        if balance + locked > 0:
-            market = f"KRW-{currency}"
-            # 현재가 조회
-            try:
-                ticker_data = await get_ticker([market])
-                current_price = ticker_data[0]["current_price"] if ticker_data else avg_buy
-            except Exception:
-                current_price = avg_buy
-
-            value      = (balance + locked) * current_price
-            return_pct = ((current_price - avg_buy) / avg_buy * 100) if avg_buy > 0 else 0
-            total_value += value
-            holdings.append({
-                "ticker":        currency,
-                "name":          currency,
-                "qty":           balance + locked,
-                "avg_cost":      avg_buy,
-                "current_price": current_price,
-                "value":         value,
-                "return_pct":    round(return_pct, 2),
-            })
-
-    return {
-        "exchange":    "upbit",
-        "krw_balance": krw_balance,
-        "total_value": total_value + krw_balance,
-        "holdings":    holdings,
-    }
+    """Authenticated account access is outside the paper MVP boundary."""
+    raise LiveTradingBlocked("Upbit 계좌 인증 조회는 paper MVP에서 차단됩니다.")
 
 
 async def place_order(
@@ -168,26 +90,5 @@ async def place_order(
     volume:     Optional[float] = None,
     order_type: str = "limit",  # limit | price(시장가 매수) | market(시장가 매도)
 ) -> dict:
-    """주문 실행."""
-    if not _access_key():
-        raise ValueError("UPBIT_ACCESS_KEY 없음")
-
-    body: dict = {
-        "market": market,
-        "side":   side,
-        "ord_type": order_type,
-    }
-    if price  is not None: body["price"]  = str(price)
-    if volume is not None: body["volume"] = str(volume)
-
-    import urllib.parse
-    query_string = urllib.parse.urlencode(body)
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(
-            f"{UPBIT_BASE}/orders",
-            params=body,
-            headers=_auth_header(query_string),
-        )
-        resp.raise_for_status()
-        return resp.json()
+    """All Upbit order submission is hard-blocked in this MVP."""
+    raise LiveTradingBlocked("Upbit 주문 제출은 paper MVP에서 차단됩니다.")

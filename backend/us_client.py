@@ -5,8 +5,12 @@
 - 암호화폐 차트:  Binance Klines API (무료·키 불필요·레이트리밋 없음)
 """
 import asyncio
+import time
 from datetime import datetime, timedelta
 import httpx
+
+_CHART_CACHE_TTL_SECONDS = 60.0
+_chart_cache: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 
 # ─────────────────────────────────────────────────
 # 미국 주식 (yfinance는 동기 라이브러리 → run_in_executor)
@@ -58,8 +62,16 @@ async def get_us_price(ticker: str) -> dict:
 
 
 async def get_us_chart(ticker: str, period: str = "1M") -> list[dict]:
+    cache_key = (ticker.upper(), period)
+    now = time.monotonic()
+    cached = _chart_cache.get(cache_key)
+    if cached and now - cached[0] < _CHART_CACHE_TTL_SECONDS:
+        return [c.copy() for c in cached[1]]
+
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _yf_chart_sync, ticker, period)
+    candles = await loop.run_in_executor(None, _yf_chart_sync, ticker, period)
+    _chart_cache[cache_key] = (time.monotonic(), candles)
+    return [c.copy() for c in candles]
 
 
 async def get_us_prices_bulk(tickers: list[str]) -> list[dict]:

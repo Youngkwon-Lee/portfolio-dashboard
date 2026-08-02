@@ -142,6 +142,35 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "데이터 부족 (최소 10개 캔들 필요)"})
 
+    def test_backtest_success_contract_returns_all_paper_results(self) -> None:
+        candles = []
+        for i in range(80):
+            close = 100 + i * 0.5
+            candles.append(
+                {
+                    "date": f"2025-01-{(i % 28) + 1:02d}",
+                    "open": close - 0.2,
+                    "high": close + 1,
+                    "low": close - 1,
+                    "close": close,
+                    "volume": 1_000,
+                }
+            )
+
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+            response = self.client.post(
+                "/api/backtest",
+                json={"ticker": "BTC", "period": "1Y", "initial": 1_000_000, "strategy": "all"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["ticker"], "BTC")
+        self.assertEqual(payload["period"], "1Y")
+        self.assertEqual(len(payload["results"]), 6)
+        self.assertTrue(all(result["curve"] for result in payload["results"]))
+        self.assertTrue(all(result["paper"] for result in payload["results"]))
+
 
 if __name__ == "__main__":
     unittest.main()

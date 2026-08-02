@@ -205,6 +205,31 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(payload["candles"], candles)
         provider.assert_awaited_once_with("AAPL", "1M")
 
+    def test_paper_start_stop_contract_never_uses_live_provider(self) -> None:
+        with (
+            patch.object(main.bot, "configure") as configure,
+            patch.object(main.bot, "start", new=AsyncMock()) as start,
+            patch.object(main.bot, "stop", new=AsyncMock()) as stop,
+        ):
+            started = self.client.post(
+                "/api/bot/start",
+                json={
+                    "mode": "paper",
+                    "strategy": "ensemble",
+                    "symbols": ["BTC"],
+                    "initial_capital": 1_000_000,
+                },
+            )
+            stopped = self.client.post("/api/bot/stop")
+
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()["execution_mode"], "paper")
+        self.assertFalse(started.json()["live_allowed"])
+        self.assertEqual(stopped.status_code, 200)
+        configure.assert_called_once_with("paper", "ensemble", ["BTC"], 1_000_000)
+        start.assert_awaited_once()
+        stop.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

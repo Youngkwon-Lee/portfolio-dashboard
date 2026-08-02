@@ -193,6 +193,18 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertTrue(all(result["curve"] for result in payload["results"]))
         self.assertTrue(all(result["paper"] for result in payload["results"]))
 
+    def test_chart_contract_includes_source_and_fetched_at(self) -> None:
+        candles = [{"date": "2026-08-01", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10}]
+        with patch.object(main.us, "get_us_chart", new=AsyncMock(return_value=candles)) as provider:
+            response = self.client.get("/api/price/AAPL/chart?period=1M")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["source"], "Yahoo Finance")
+        self.assertTrue(payload["fetched_at"])
+        self.assertEqual(payload["candles"], candles)
+        provider.assert_awaited_once_with("AAPL", "1M")
+
 
 if __name__ == "__main__":
     unittest.main()

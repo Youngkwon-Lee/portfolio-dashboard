@@ -35,6 +35,8 @@ interface BtResult {
 interface BtResponse {
   ticker:  string;
   period:  string;
+  source: string;
+  fetched_at: string | null;
   results: BtResult[];
 }
 
@@ -218,9 +220,16 @@ export default function BacktestPage() {
       {/* 헤더 */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <span className="text-sm font-bold flex items-center gap-2"><FlaskConical size={16} aria-hidden="true" /> 백테스트</span>
-        <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}>
-          HISTORICAL SIMULATION · 실제 주문 없음
-        </span>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}>
+            HISTORICAL SIMULATION · 실제 주문 없음
+          </span>
+          {response?.fetched_at && (
+            <span className="text-xs" style={{ color: "var(--muted)" }}>
+              출처: {response.source} · 조회 {new Date(response.fetched_at).toLocaleString("ko-KR")}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="p-3 rounded-lg flex gap-3" role="note" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>

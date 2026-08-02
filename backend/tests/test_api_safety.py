@@ -136,7 +136,17 @@ class ApiSafetyContractTests(unittest.TestCase):
             {"date": str(i), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
             for i in range(9)
         ]
-        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+        with patch.object(
+            main,
+            "get_chart",
+            new=AsyncMock(
+                return_value={
+                    "candles": candles,
+                    "source": "fixture provider",
+                    "fetched_at": "2026-08-02T00:00:00+00:00",
+                }
+            ),
+        ):
             response = self.client.post("/api/backtest", json={"ticker": "BTC"})
 
         self.assertEqual(response.status_code, 400)
@@ -157,7 +167,17 @@ class ApiSafetyContractTests(unittest.TestCase):
                 }
             )
 
-        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+        with patch.object(
+            main,
+            "get_chart",
+            new=AsyncMock(
+                return_value={
+                    "candles": candles,
+                    "source": "fixture provider",
+                    "fetched_at": "2026-08-02T00:00:00+00:00",
+                }
+            ),
+        ):
             response = self.client.post(
                 "/api/backtest",
                 json={"ticker": "BTC", "period": "1Y", "initial": 1_000_000, "strategy": "all"},
@@ -167,6 +187,8 @@ class ApiSafetyContractTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["ticker"], "BTC")
         self.assertEqual(payload["period"], "1Y")
+        self.assertEqual(payload["source"], "fixture provider")
+        self.assertEqual(payload["fetched_at"], "2026-08-02T00:00:00+00:00")
         self.assertEqual(len(payload["results"]), 6)
         self.assertTrue(all(result["curve"] for result in payload["results"]))
         self.assertTrue(all(result["paper"] for result in payload["results"]))

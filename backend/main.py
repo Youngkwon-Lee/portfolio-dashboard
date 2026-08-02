@@ -3,7 +3,7 @@
 실행: uvicorn main:app --reload --port 8000
 """
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -60,6 +60,14 @@ def detect_market(ticker: str) -> str:
     if t in CRYPTO_TICKERS:         return "CRYPTO"
     if t.isdigit() and len(t) == 6: return "KRX"
     return "US"
+
+
+def market_data_source(market: str) -> str:
+    return {
+        "KRX": "KIS VTS market data",
+        "CRYPTO": "Binance public candles",
+        "US": "Yahoo Finance",
+    }.get(market, "Unknown provider")
 
 
 # ──────────────────────────────────────────────
@@ -122,7 +130,14 @@ async def get_chart(
             candles = await us.get_crypto_chart(ticker, period, currency)
         else:
             candles = await us.get_us_chart(ticker, period)
-        return {"ticker": ticker, "market": market, "period": period, "candles": candles}
+        return {
+            "ticker": ticker,
+            "market": market,
+            "period": period,
+            "candles": candles,
+            "source": market_data_source(market),
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -554,6 +569,8 @@ async def run_backtest(req: BacktestRequest):
     return {
         "ticker":  req.ticker.upper(),
         "period":  req.period,
+        "source": chart.get("source", "Unknown provider"),
+        "fetched_at": chart.get("fetched_at"),
         "results": [serialize(r) for r in results],
     }
 

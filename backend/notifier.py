@@ -1,5 +1,5 @@
 """
-알림 모듈 — 텔레그램 봇
+알림 모듈 — 텔레그램 봇 + Discord webhook
 ────────────────────────────────────────────
 설정 방법:
   1. @BotFather 에서 /newbot → TELEGRAM_BOT_TOKEN 발급
@@ -18,14 +18,17 @@
 """
 
 import asyncio
+import html
 import os
 import logging
+import re
 from typing import Optional, Callable
 import httpx
 
 logger = logging.getLogger("notifier")
 
 TELEGRAM_BASE = "https://api.telegram.org"
+DISCORD_MAX_MESSAGE = 2000
 
 # 명령어 핸들러 등록 (trading_bot에서 주입)
 _cmd_handlers: dict[str, Callable] = {}
@@ -35,10 +38,20 @@ _last_update_id: int = 0
 
 def _token()   -> str: return os.getenv("TELEGRAM_BOT_TOKEN", "")
 def _chat_id() -> str: return os.getenv("TELEGRAM_CHAT_ID", "")
+def _discord_webhook() -> str: return os.getenv("DISCORD_WEBHOOK_URL", "")
 
 
 def _enabled() -> bool:
     return bool(_token() and _chat_id())
+
+
+def _discord_enabled() -> bool:
+    return bool(_discord_webhook())
+
+
+def _discord_content(text: str) -> str:
+    """Reuse Telegram templates without leaking HTML markup into Discord."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text))[:DISCORD_MAX_MESSAGE]
 
 
 def register_handler(command: str, fn: Callable):
@@ -47,20 +60,33 @@ def register_handler(command: str, fn: Callable):
 
 
 async def send(text: str, parse_mode: str = "HTML") -> bool:
-    """텔레그램 메시지 전송."""
-    if not _enabled():
-        logger.info(f"[NOTIFY-SKIP] {text[:80]}")
-        return False
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            resp = await client.post(
-                f"{TELEGRAM_BASE}/bot{_token()}/sendMessage",
-                json={"chat_id": _chat_id(), "text": text, "parse_mode": "HTML"},
-            )
-            return resp.status_code == 200
-    except Exception as e:
-        logger.warning(f"텔레그램 전송 실패: {e}")
-        return False
+    """Configured notification channels에 best-effort 전송. 실패가 주문을 막지 않는다."""
+    delivered = False
+    if _enabled():
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.post(
+                    f"{TELEGRAM_BASE}/bot{_token()}/sendMessage",
+                    json={"chat_id": _chat_id(), "text": text, "parse_mode": parse_mode},
+                )
+                delivered = resp.status_code == 200 or delivered
+        except Exception as e:
+            logger.warning("텔레그램 전송 실패: %s", type(e).__name__)
+
+    if _discord_enabled():
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                resp = await client.post(
+                    _discord_webhook(),
+                    json={"content": _discord_content(text)},
+                )
+                delivered = resp.status_code in (200, 204) or delivered
+        except Exception as e:
+            logger.warning("Discord 전송 실패: %s", type(e).__name__)
+
+    if not _enabled() and not _discord_enabled():
+        logger.info("[NOTIFY-SKIP] %s", text[:80])
+    return delivered
 
 
 # ── 명령어 폴링 ──────────────────────────────────

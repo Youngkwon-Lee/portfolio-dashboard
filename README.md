@@ -69,6 +69,8 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 - `POST /api/bot/reconcile`: 비정상 재시작 상태 대사(정확한 확인 문구 필요)
 - `POST /api/bot/safety-reset`: 정지 상태의 kill switch 해제(정확한 확인 문구 필요)
 
+알림은 Telegram과 Discord webhook을 선택적으로 지원합니다. Discord는 `DISCORD_WEBHOOK_URL`을 런타임 시크릿으로만 주입하면 `#paper-trading-alerts`에 paper 시작·정지·매수·매도·kill switch·일일 리포트를 best-effort 전송합니다. 환경 변수가 없으면 네트워크를 호출하지 않으며, 알림 실패가 paper 주문을 성공으로 바꾸거나 실거래를 활성화하지 않습니다. webhook URL과 Telegram 자격 증명은 저장소·`.env`·로그에 기록하지 않습니다.
+
 `/api/order`, `/api/balance`, `/api/upbit/balance`, `/api/wallet/binance`는 현재 항상 차단됩니다. 실거래 활성화는 환경 변수 하나로 열 수 있는 기능이 아니며 별도의 법무·보안 설계와 승인 없이는 지원하지 않습니다.
 
 ## 백테스트 사용 범위

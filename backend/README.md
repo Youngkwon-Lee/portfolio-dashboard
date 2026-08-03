@@ -65,6 +65,8 @@ python -m unittest backend.tests.test_paper_soak -v
 
 기본 soak는 임시 SQLite와 안전 상태 파일에서 원장 1,200건, 중복 재전송 601회, 비정상 재연결 6회, 시세 장애 50회, kill switch 100회를 검증합니다. 테스트는 실제 인증 API나 주문 엔드포인트를 호출하지 않으며 downstream 클라이언트가 호출되지 않았음을 mock으로 검증합니다.
 
+백테스트의 `promotion_gate`는 워크포워드 양수 폴드 2개 이상, 폴드당 검증 표본 30개 이상, 평균 수익률 양수인 전략만 paper 관찰 후보로 표시합니다. 후보가 없으면 `HOLD`를 권고하며, 이 계약은 실거래를 활성화하지 않습니다.
+
 24시간 wall-clock soak는 OS 정리 대상인 `/tmp`가 아닌 Application Support 경로에 증거를 남깁니다.
 
 ```bash

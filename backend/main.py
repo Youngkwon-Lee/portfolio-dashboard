@@ -659,6 +659,11 @@ async def run_backtest(req: BacktestRequest):
                 "positive_fold_ratio": positive_folds / len(returns),
                 "return_range_pct": max(returns) - min(returns),
                 "consistent": positive_folds >= 2,
+                "promotion_eligible": (
+                    positive_folds >= 2
+                    and average_return > 0
+                    and all(fold["test_samples"] >= 30 for fold in folds)
+                ),
             })
         walk_forward = {
             "method": "expanding_window",
@@ -691,6 +696,12 @@ async def run_backtest(req: BacktestRequest):
             "test_mdd": test_result.mdd,
             "test_sharpe": test_result.sharpe,
         })
+
+    eligible_strategies = [
+        summary["strategy"]
+        for summary in walk_forward["summaries"]
+        if summary.get("promotion_eligible")
+    ]
 
     return {
         "ticker":  req.ticker.upper(),
@@ -731,6 +742,18 @@ async def run_backtest(req: BacktestRequest):
             "results": validation,
         },
         "walk_forward": walk_forward,
+        "promotion_gate": {
+            "paper_only": True,
+            "minimum_positive_folds": 2,
+            "minimum_test_samples_per_fold": 30,
+            "requires_positive_average_return": True,
+            "eligible_strategies": eligible_strategies,
+            "warning": (
+                "승격 조건을 만족하는 전략이 없어 HOLD 권고"
+                if not eligible_strategies
+                else None
+            ),
+        },
         "results": [serialize(r) for r in results],
     }
 

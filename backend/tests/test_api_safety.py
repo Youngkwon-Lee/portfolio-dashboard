@@ -313,6 +313,10 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(summary["strategy"], "bah")
         self.assertEqual(summary["positive_fold_ratio"], 1.0)
         self.assertTrue(summary["consistent"])
+        self.assertIn("promotion_eligible", summary)
+        gate = long_response.json()["promotion_gate"]
+        self.assertTrue(gate["paper_only"])
+        self.assertEqual(gate["eligible_strategies"], ["bah"])
 
     def test_backtest_cost_inputs_change_paper_result_and_are_returned(self) -> None:
         candles = [

@@ -70,7 +70,15 @@ interface BtResponse {
     available: boolean;
     reason: string | null;
     folds: { fold: number; train_end: string; test_start: string; test_end: string; test_samples: number; results: BtResult[] }[];
-    summaries: { strategy: string; average_return_pct: number; return_volatility_pct: number; positive_fold_ratio: number; return_range_pct: number; consistent: boolean }[];
+    summaries: { strategy: string; average_return_pct: number; return_volatility_pct: number; positive_fold_ratio: number; return_range_pct: number; consistent: boolean; promotion_eligible: boolean }[];
+  };
+  promotion_gate: {
+    paper_only: boolean;
+    minimum_positive_folds: number;
+    minimum_test_samples_per_fold: number;
+    requires_positive_average_return: boolean;
+    eligible_strategies: string[];
+    warning: string | null;
   };
   results: BtResult[];
 }
@@ -511,6 +519,20 @@ export default function BacktestPage() {
               })() : (
                 <div style={{ color: "var(--muted)" }}>{response.walk_forward.reason}</div>
               )}
+            </div>
+          )}
+
+          {response?.promotion_gate && (
+            <div className="p-3 rounded-lg text-xs" role="status" style={{ background: response.promotion_gate.eligible_strategies.includes(selected.strategy) ? "#3fb95012" : "#d2992212", border: `1px solid ${response.promotion_gate.eligible_strategies.includes(selected.strategy) ? "#3fb95055" : "#d2992255"}` }}>
+              <div className="font-semibold mb-1">paper 전략 승격 게이트</div>
+              {response.promotion_gate.eligible_strategies.includes(selected.strategy) ? (
+                <div style={{ color: "var(--accent-green)" }}>현재 선택 전략은 paper 관찰 후보입니다.</div>
+              ) : (
+                <div style={{ color: "var(--accent-yellow)" }}>{response.promotion_gate.warning ?? "승격 조건 미충족 · HOLD 권고"}</div>
+              )}
+              <div className="mt-1" style={{ color: "var(--muted)" }}>
+                양수 폴드 {response.promotion_gate.minimum_positive_folds}개 이상 · 폴드당 검증 표본 {response.promotion_gate.minimum_test_samples_per_fold}개 이상 · 평균 수익률 양수 필요
+              </div>
             </div>
           )}
 

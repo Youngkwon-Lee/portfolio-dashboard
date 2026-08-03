@@ -283,6 +283,7 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(payload["validation"]["warning"], "검증 표본이 30개 미만이라 Sharpe 해석에 주의가 필요합니다")
         self.assertFalse(payload["walk_forward"]["available"])
         self.assertEqual(payload["walk_forward"]["folds"], [])
+        self.assertEqual(payload["walk_forward"]["summaries"], [])
         self.assertEqual(len(payload["validation"]["results"]), 6)
         self.assertEqual(len(payload["results"]), 6)
         self.assertTrue(all(result["curve"] for result in payload["results"]))
@@ -308,6 +309,10 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(len(long_response.json()["walk_forward"]["folds"]), 3)
         self.assertEqual(long_response.json()["walk_forward"]["folds"][0]["test_samples"], 30)
         self.assertTrue(all(len(fold["results"]) == 1 for fold in long_response.json()["walk_forward"]["folds"]))
+        summary = long_response.json()["walk_forward"]["summaries"][0]
+        self.assertEqual(summary["strategy"], "bah")
+        self.assertEqual(summary["positive_fold_ratio"], 1.0)
+        self.assertTrue(summary["consistent"])
 
     def test_backtest_cost_inputs_change_paper_result_and_are_returned(self) -> None:
         candles = [

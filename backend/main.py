@@ -617,6 +617,7 @@ async def run_backtest(req: BacktestRequest):
         "method": "expanding_window",
         "available": False,
         "folds": [],
+        "summaries": [],
         "reason": "워크포워드 검증에는 최소 180개 캔들이 필요합니다",
     }
     if len(bars) >= 180:
@@ -641,10 +642,29 @@ async def run_backtest(req: BacktestRequest):
                 "test_samples": len(fold_bars),
                 "results": [serialize(result) for result in fold_results],
             })
+        summaries = []
+        strategy_names = [result["strategy"] for result in folds[0]["results"]]
+        for strategy in strategy_names:
+            returns = [
+                next(result["total_return_pct"] for result in fold["results"] if result["strategy"] == strategy)
+                for fold in folds
+            ]
+            average_return = sum(returns) / len(returns)
+            volatility = math.sqrt(sum((value - average_return) ** 2 for value in returns) / len(returns))
+            positive_folds = sum(value > 0 for value in returns)
+            summaries.append({
+                "strategy": strategy,
+                "average_return_pct": average_return,
+                "return_volatility_pct": volatility,
+                "positive_fold_ratio": positive_folds / len(returns),
+                "return_range_pct": max(returns) - min(returns),
+                "consistent": positive_folds >= 2,
+            })
         walk_forward = {
             "method": "expanding_window",
             "available": True,
             "folds": folds,
+            "summaries": summaries,
             "reason": None,
         }
 

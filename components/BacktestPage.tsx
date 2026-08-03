@@ -70,6 +70,7 @@ interface BtResponse {
     available: boolean;
     reason: string | null;
     folds: { fold: number; train_end: string; test_start: string; test_end: string; test_samples: number; results: BtResult[] }[];
+    summaries: { strategy: string; average_return_pct: number; return_volatility_pct: number; positive_fold_ratio: number; return_range_pct: number; consistent: boolean }[];
   };
   results: BtResult[];
 }
@@ -488,7 +489,8 @@ export default function BacktestPage() {
                   fold: fold.fold,
                   result: fold.results.find((result) => result.strategy === selected.strategy),
                 })).filter((fold) => fold.result);
-                const averageReturn = foldResults.reduce((sum, fold) => sum + (fold.result?.total_return_pct ?? 0), 0) / Math.max(foldResults.length, 1);
+                const summary = response.walk_forward.summaries.find((item) => item.strategy === selected.strategy);
+                const averageReturn = summary?.average_return_pct ?? 0;
                 return (
                   <>
                     <div className="flex flex-wrap gap-x-3 gap-y-1" style={{ color: "var(--muted)" }}>
@@ -499,6 +501,11 @@ export default function BacktestPage() {
                         평균 {fmt(averageReturn)}
                       </span>
                     </div>
+                    {summary && (
+                      <div className="mt-1" style={{ color: summary.consistent ? "var(--accent-green)" : "var(--accent-yellow)" }}>
+                        변동성 ±{summary.return_volatility_pct.toFixed(2)}% · 양수 폴드 {(summary.positive_fold_ratio * 100).toFixed(0)}% · 범위 {summary.return_range_pct.toFixed(2)}% · {summary.consistent ? "일관성 양호" : "결과 편차 주의"}
+                      </div>
+                    )}
                   </>
                 );
               })() : (

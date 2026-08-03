@@ -249,6 +249,41 @@ async def _cached_price(symbol: str) -> dict:
 
 # ── 신호 생성 ─────────────────────────────────────
 
+def _validated_signal_bars(chart: object) -> tuple[list[bt.Bar], str | None]:
+    """Validate provider candles before a strategy can emit a trade signal."""
+    if not isinstance(chart, list) or not chart:
+        return [], "시세 형식 오류"
+
+    bars: list[bt.Bar] = []
+    previous_date: datetime | None = None
+    timezone_aware: bool | None = None
+    for candle in chart:
+        try:
+            parsed_date = datetime.fromisoformat(str(candle["date"]).replace("Z", "+00:00"))
+            values = {
+                field: float(candle[field])
+                for field in ("open", "high", "low", "close")
+            }
+            volume = float(candle.get("volume", 0))
+        except (KeyError, TypeError, ValueError):
+            return [], "시세 형식 오류"
+
+        aware = parsed_date.tzinfo is not None
+        if timezone_aware is None:
+            timezone_aware = aware
+        if aware != timezone_aware or (previous_date is not None and parsed_date <= previous_date):
+            return [], "시세 시간 순서 오류"
+        if not all(math.isfinite(value) and value > 0 for value in values.values()):
+            return [], "시세 OHLC 오류"
+        if not math.isfinite(volume) or volume < 0:
+            return [], "시세 거래량 오류"
+        if values["high"] < max(values["open"], values["close"]) or values["low"] > min(values["open"], values["close"]):
+            return [], "시세 고저가 관계 오류"
+
+        bars.append(bt.Bar(date=str(candle["date"]), volume=volume, **values))
+        previous_date = parsed_date
+    return bars, None
+
 async def generate_signal(symbol: str, strategy: str) -> tuple[Signal, dict]:
     """
     최근 가격 데이터로 전략 신호 생성.
@@ -259,9 +294,9 @@ async def generate_signal(symbol: str, strategy: str) -> tuple[Signal, dict]:
     if len(chart) < 10:
         return Signal.HOLD, {"reason": "데이터 부족"}
 
-    bars = [bt.Bar(date=c["date"], open=c["open"], high=c["high"],
-                   low=c["low"], close=c["close"], volume=c.get("volume", 0))
-            for c in chart]
+    bars, validation_error = _validated_signal_bars(chart)
+    if validation_error:
+        return Signal.HOLD, {"strategy": strategy, "bars": len(chart), "reason": validation_error}
 
     closes = [b.close for b in bars]
     n = len(closes)

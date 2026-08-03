@@ -166,6 +166,26 @@ class TradingBotIntegrationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(SafetyViolation, "허용되지 않은"):
             self.bot.configure("paper", "typo-means-buy", ["BTC"], 1_000_000)
 
+    async def test_signal_fails_closed_on_non_chronological_candles(self) -> None:
+        candles = [
+            {"date": f"2026-01-{day:02d}T00:00:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1}
+            for day in range(1, 10)
+        ]
+        candles.append({"date": "2026-01-01T00:00:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100, "volume": 1})
+        with patch.object(self.bot, "_cached_chart", new=AsyncMock(return_value=candles)):
+            signal, info = await self.bot.generate_signal("BTC", "dual_mom")
+        self.assertEqual(signal, self.bot.Signal.HOLD)
+        self.assertEqual(info["reason"], "시세 시간 순서 오류")
+
+    async def test_signal_fails_closed_on_invalid_ohlc(self) -> None:
+        candles = [
+            {"date": "2026-01-01T00:00:00+00:00", "open": 100, "high": 99, "low": 98, "close": 100, "volume": 1},
+        ] * 10
+        with patch.object(self.bot, "_cached_chart", new=AsyncMock(return_value=candles)):
+            signal, info = await self.bot.generate_signal("BTC", "dual_mom")
+        self.assertEqual(signal, self.bot.Signal.HOLD)
+        self.assertEqual(info["reason"], "시세 고저가 관계 오류")
+
 
 if __name__ == "__main__":
     unittest.main()

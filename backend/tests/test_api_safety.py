@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -110,6 +111,8 @@ class ApiSafetyContractTests(unittest.TestCase):
             {"ticker": "BTC", "period": "5Y"},
             {"ticker": "BTC", "strategy": "not_real"},
             {"ticker": "BTC USD"},
+            {"ticker": "BTC", "commission_bps": -1},
+            {"ticker": "BTC", "slippage_bps": 501},
         ]
         with patch.object(main, "get_chart", new=AsyncMock()) as get_chart:
             for payload in invalid_payloads:
@@ -152,13 +155,92 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json(), {"detail": "데이터 부족 (최소 10개 캔들 필요)"})
 
+    def test_backtest_requires_enough_data_for_period_split_validation(self) -> None:
+        candles = [
+            {"date": str(i), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(12)
+        ]
+        with patch.object(
+            main,
+            "get_chart",
+            new=AsyncMock(
+                return_value={
+                    "candles": candles,
+                    "source": "fixture provider",
+                    "fetched_at": "2026-08-02T00:00:00+00:00",
+                }
+            ),
+        ):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(),
+            {"detail": "데이터 부족 (기간 분할 검증에 최소 20개 캔들 필요)"},
+        )
+
+    def test_backtest_rejects_invalid_or_non_chronological_dates(self) -> None:
+        candles = [
+            {"date": f"2025-01-{i + 1:02d}", "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(20)
+        ]
+        candles[10]["date"] = "not-a-date"
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 날짜 형식이 올바르지 않습니다"})
+
+        ordered = [
+            {"date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(20)
+        ]
+        ordered[10]["date"] = ordered[9]["date"]
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": ordered})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 날짜 순서가 올바르지 않습니다"})
+
+        mixed_timezone = [
+            {"date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(20)
+        ]
+        mixed_timezone[1]["date"] = "2025-01-02T00:00:00+00:00"
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": mixed_timezone})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 날짜 형식이 일관되지 않습니다"})
+
+    def test_backtest_rejects_invalid_ohlc_values(self) -> None:
+        candles = [
+            {"date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(), "open": 1, "high": 1, "low": 1, "close": 1, "volume": 1}
+            for i in range(20)
+        ]
+        candles[5]["high"] = float("nan")
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 OHLC 범위가 올바르지 않습니다"})
+
+        candles[5]["high"] = 1
+        zero_volume = [dict(candle, volume=0) for candle in candles]
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": zero_volume, "source": "fixture"})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "bah"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["execution_mode"], "paper")
+
+        negative_volume = [dict(candle, volume=-1) for candle in candles]
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": negative_volume})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "가격 데이터 OHLC 범위가 올바르지 않습니다"})
+
     def test_backtest_success_contract_returns_all_paper_results(self) -> None:
         candles = []
         for i in range(80):
             close = 100 + i * 0.5
             candles.append(
                 {
-                    "date": f"2025-01-{(i % 28) + 1:02d}",
+                    "date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(),
                     "open": close - 0.2,
                     "high": close + 1,
                     "low": close - 1,
@@ -187,11 +269,92 @@ class ApiSafetyContractTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["ticker"], "BTC")
         self.assertEqual(payload["period"], "1Y")
+        self.assertEqual(payload["execution_mode"], "paper")
+        self.assertFalse(payload["live_allowed"])
         self.assertEqual(payload["source"], "fixture provider")
         self.assertEqual(payload["fetched_at"], "2026-08-02T00:00:00+00:00")
+        self.assertEqual(payload["costs"], {"commission_bps": 10.0, "slippage_bps": 5.0, "total_bps": 15.0})
+        self.assertEqual(payload["benchmark"]["strategy"], "bah")
+        self.assertEqual(payload["validation"]["method"], "chronological_holdout")
+        self.assertEqual(payload["validation"]["label"], "시간순 홀드아웃")
+        self.assertEqual(payload["validation"]["train_ratio"], 0.7)
+        self.assertEqual(payload["validation"]["train_samples"], 56)
+        self.assertEqual(payload["validation"]["test_samples"], 24)
+        self.assertEqual(payload["validation"]["warning"], "검증 표본이 30개 미만이라 Sharpe 해석에 주의가 필요합니다")
+        self.assertTrue(payload["walk_forward"]["available"])
+        self.assertEqual(len(payload["walk_forward"]["folds"]), 3)
+        self.assertTrue(all(len(fold["results"]) == 6 for fold in payload["walk_forward"]["folds"]))
+        self.assertEqual(len(payload["validation"]["results"]), 6)
         self.assertEqual(len(payload["results"]), 6)
         self.assertTrue(all(result["curve"] for result in payload["results"]))
         self.assertTrue(all(result["paper"] for result in payload["results"]))
+
+        long_candles = [
+            {
+                "date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(),
+                "open": 100 + i * 0.1,
+                "high": 101 + i * 0.1,
+                "low": 99 + i * 0.1,
+                "close": 100 + i * 0.1,
+                "volume": 1_000,
+            }
+            for i in range(100)
+        ]
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": long_candles, "source": "fixture"})):
+            long_response = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "bah"})
+        self.assertEqual(long_response.status_code, 200)
+        self.assertEqual(long_response.json()["validation"]["test_samples"], 30)
+        self.assertIsNone(long_response.json()["validation"]["warning"])
+        self.assertTrue(long_response.json()["walk_forward"]["available"])
+        self.assertEqual(len(long_response.json()["walk_forward"]["folds"]), 3)
+        self.assertEqual(long_response.json()["walk_forward"]["folds"][0]["test_samples"], 10)
+
+    def test_backtest_cost_inputs_change_paper_result_and_are_returned(self) -> None:
+        candles = [
+            {"date": f"2025-01-{i + 1:02d}", "open": 100 + i, "high": 102 + i, "low": 99 + i, "close": 101 + i, "volume": 1_000}
+            for i in range(20)
+        ]
+        with patch.object(
+            main,
+            "get_chart",
+            new=AsyncMock(return_value={"candles": candles, "source": "fixture", "fetched_at": "2026-08-02T00:00:00+00:00"}),
+        ):
+            free = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "bah", "commission_bps": 0, "slippage_bps": 0})
+            costly = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "bah", "commission_bps": 100, "slippage_bps": 100})
+
+        self.assertEqual(free.status_code, 200)
+        self.assertEqual(costly.status_code, 200)
+        self.assertEqual(costly.json()["costs"]["total_bps"], 200.0)
+        self.assertEqual(costly.json()["benchmark"]["strategy"], "bah")
+        self.assertEqual(costly.json()["validation"]["results"][0]["strategy"], "bah")
+        self.assertLess(costly.json()["results"][0]["final"], free.json()["results"][0]["final"])
+
+    def test_backtest_ensemble_strategy_is_paper_only_in_single_strategy_mode(self) -> None:
+        candles = []
+        for i in range(40):
+            close = 100 + (i % 8) * 2 + i * 0.1
+            candles.append(
+                {
+                    "date": (date(2025, 1, 1) + timedelta(days=i)).isoformat(),
+                    "open": close - 0.5,
+                    "high": close + 1,
+                    "low": close - 1,
+                    "close": close,
+                    "volume": 1_000,
+                }
+            )
+
+        with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles, "source": "fixture"})):
+            response = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "ensemble"})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["execution_mode"], "paper")
+        self.assertFalse(payload["live_allowed"])
+        self.assertEqual([result["strategy"] for result in payload["results"]], ["ensemble"])
+        self.assertEqual(payload["benchmark"]["strategy"], "bah")
+        self.assertEqual([result["strategy"] for result in payload["validation"]["results"]], ["ensemble"])
+        self.assertTrue(payload["results"][0]["paper"])
 
     def test_chart_contract_includes_source_and_fetched_at(self) -> None:
         candles = [{"date": "2026-08-01", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10}]

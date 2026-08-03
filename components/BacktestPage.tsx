@@ -35,8 +35,42 @@ interface BtResult {
 interface BtResponse {
   ticker:  string;
   period:  string;
+  execution_mode: string;
+  live_allowed: boolean;
+  costs: { commission_bps: number; slippage_bps: number; total_bps: number };
   source: string;
   fetched_at: string | null;
+  benchmark: {
+    strategy: string;
+    strategy_label: string;
+    final: number;
+    total_return_pct: number;
+    mdd: number;
+  } | null;
+  validation: {
+    method: string;
+    label: string;
+    train_ratio: number;
+    train_samples: number;
+    test_samples: number;
+    warning: string | null;
+    train_end: string;
+    test_start: string;
+    results: {
+      strategy: string;
+      strategy_label: string;
+      train_return_pct: number;
+      test_return_pct: number;
+      test_mdd: number;
+      test_sharpe: number;
+    }[];
+  };
+  walk_forward: {
+    method: string;
+    available: boolean;
+    reason: string | null;
+    folds: { fold: number; train_end: string; test_start: string; test_end: string; test_samples: number; results: BtResult[] }[];
+  };
   results: BtResult[];
 }
 
@@ -168,6 +202,8 @@ export default function BacktestPage() {
   const [ticker,   setTicker]   = useState("BTC");
   const [period,   setPeriod]   = useState<"1M"|"3M"|"6M"|"1Y">("1Y");
   const [initial,  setInitial]  = useState("10000000");
+  const [commissionBps, setCommissionBps] = useState("10");
+  const [slippageBps, setSlippageBps] = useState("5");
   const [strategy, setStrategy] = useState("all");
   const [response, setResponse] = useState<BtResponse | null>(null);
   const [selected, setSelected] = useState<BtResult | null>(null);
@@ -184,7 +220,10 @@ export default function BacktestPage() {
       const res = await fetch(`${API_BASE}/api/backtest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker: ticker.trim().toUpperCase(), period, initial: Number(initial), strategy }),
+        body: JSON.stringify({
+          ticker: ticker.trim().toUpperCase(), period, initial: Number(initial), strategy,
+          commission_bps: Number(commissionBps), slippage_bps: Number(slippageBps),
+        }),
       });
       if (!res.ok) {
         const err = await res.json();
@@ -224,6 +263,15 @@ export default function BacktestPage() {
           <span className="text-xs px-2 py-0.5 rounded" style={{ background: "#58a6ff18", color: "var(--accent-blue)", border: "1px solid #58a6ff55" }}>
             HISTORICAL SIMULATION · 실제 주문 없음
           </span>
+          {response && (response.execution_mode === "paper" && response.live_allowed === false ? (
+            <span className="text-xs px-2 py-0.5 rounded" aria-label="백테스트 실행 모드" style={{ background: "#3fb95018", color: "var(--accent-green)", border: "1px solid #3fb95055" }}>
+              PAPER ONLY · LIVE 차단
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-0.5 rounded" role="alert" aria-label="백테스트 실행 모드 확인 실패" style={{ background: "#f8514918", color: "var(--accent-red)", border: "1px solid #f8514955" }}>
+              실행 모드 확인 실패
+            </span>
+          ))}
           {response?.fetched_at && (
             <span className="text-xs" style={{ color: "var(--muted)" }}>
               출처: {response.source} · 조회 {new Date(response.fetched_at).toLocaleString("ko-KR")}
@@ -236,7 +284,7 @@ export default function BacktestPage() {
         <ShieldCheck size={18} className="shrink-0" aria-hidden="true" style={{ color: "var(--accent-blue)" }} />
         <div className="text-xs leading-relaxed">
           <div className="font-semibold">계좌·주문 경로와 분리된 과거 데이터 시뮬레이션</div>
-          <div className="mt-0.5" style={{ color: "var(--muted)" }}>거래비용 0.15%와 무위험 수익률 3.5%를 가정합니다. 결과는 미래 수익을 보장하지 않습니다.</div>
+          <div className="mt-0.5" style={{ color: "var(--muted)" }}>수수료·슬리피지와 무위험 수익률을 직접 설정합니다. 결과는 미래 수익을 보장하지 않습니다.</div>
         </div>
       </div>
 
@@ -291,6 +339,20 @@ export default function BacktestPage() {
             style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }}>
             {STRATEGIES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
           </select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs" style={{ color: "var(--muted)" }}>수수료 (bps)</label>
+          <input value={commissionBps} aria-label="백테스트 수수료" inputMode="decimal"
+            onChange={(e) => setCommissionBps(e.target.value.replace(/[^0-9.]/g, ""))}
+            className="px-3 py-2 rounded text-sm outline-none" style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }} />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-xs" style={{ color: "var(--muted)" }}>슬리피지 (bps)</label>
+          <input value={slippageBps} aria-label="백테스트 슬리피지" inputMode="decimal"
+            onChange={(e) => setSlippageBps(e.target.value.replace(/[^0-9.]/g, ""))}
+            className="px-3 py-2 rounded text-sm outline-none" style={{ background: "#0d1117", border: "1px solid var(--card-border)", color: "var(--foreground)" }} />
         </div>
 
         <button onClick={run} disabled={loading}
@@ -386,6 +448,64 @@ export default function BacktestPage() {
             <KPI label="최대 낙폭(MDD)" value={`-${selected.mdd.toFixed(2)}%`} color="var(--accent-red)" sub="최대 손실 구간" />
             <KPI label="최종 자산" value={fmtKRW(selected.final)} sub={`초기 ${fmtKRW(selected.initial)}`} />
           </div>
+
+          {response && response.benchmark && selected.strategy !== response.benchmark.strategy && (
+            <div className="p-3 rounded-lg text-xs flex items-center justify-between" style={{ background: "#0d1117", border: "1px solid var(--card-border)" }}>
+              <span style={{ color: "var(--muted)" }}>Buy & Hold 기준선 대비</span>
+              <span className="font-semibold" style={{ color: selected.total_return_pct >= response.benchmark.total_return_pct ? "var(--accent-green)" : "var(--accent-red)" }}>
+                {fmt(selected.total_return_pct - response.benchmark.total_return_pct)}p
+              </span>
+            </div>
+          )}
+
+          {response && (() => {
+            const validation = response.validation.results.find((r) => r.strategy === selected.strategy);
+            return validation ? (
+              <div className="p-3 rounded-lg text-xs" style={{ background: "#0d1117", border: "1px solid var(--card-border)" }}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold">{response.validation.label} (70% / 30%)</span>
+                  <span style={{ color: "var(--muted)" }}>{response.validation.test_start} 이후</span>
+                </div>
+                <div className="grid grid-cols-4 gap-2" style={{ color: "var(--muted)" }}>
+                  <span>학습 {fmt(validation.train_return_pct)}</span>
+                  <span style={{ color: validation.test_return_pct >= 0 ? "var(--accent-green)" : "var(--accent-red)" }}>검증 {fmt(validation.test_return_pct)}</span>
+                  <span>검증 MDD -{validation.test_mdd.toFixed(2)}%</span>
+                  <span>검증 Sharpe {validation.test_sharpe.toFixed(3)}</span>
+                </div>
+                <div className="mt-1" style={{ color: response.validation.warning ? "var(--accent-yellow)" : "var(--muted)" }}>
+                  표본 학습 {response.validation.train_samples}개 · 검증 {response.validation.test_samples}개
+                  {response.validation.warning ? ` · ${response.validation.warning}` : ""}
+                </div>
+              </div>
+            ) : null;
+          })()}
+
+          {response?.walk_forward && (
+            <div className="p-3 rounded-lg text-xs" style={{ background: "#0d1117", border: "1px solid var(--card-border)" }}>
+              <div className="font-semibold mb-1">워크포워드 검증 (확장 윈도우)</div>
+              {response.walk_forward.available ? (() => {
+                const foldResults = response.walk_forward.folds.map((fold) => ({
+                  fold: fold.fold,
+                  result: fold.results.find((result) => result.strategy === selected.strategy),
+                })).filter((fold) => fold.result);
+                const averageReturn = foldResults.reduce((sum, fold) => sum + (fold.result?.total_return_pct ?? 0), 0) / Math.max(foldResults.length, 1);
+                return (
+                  <>
+                    <div className="flex flex-wrap gap-x-3 gap-y-1" style={{ color: "var(--muted)" }}>
+                      {foldResults.map(({ fold, result }) => (
+                        <span key={fold}>폴드 {fold} {fmt(result?.total_return_pct ?? 0)}</span>
+                      ))}
+                      <span className="font-semibold" style={{ color: averageReturn >= 0 ? "var(--accent-green)" : "var(--accent-red)" }}>
+                        평균 {fmt(averageReturn)}
+                      </span>
+                    </div>
+                  </>
+                );
+              })() : (
+                <div style={{ color: "var(--muted)" }}>{response.walk_forward.reason}</div>
+              )}
+            </div>
+          )}
 
           {/* 위험조정 지표 */}
           <div className="p-3 rounded-lg flex flex-col gap-2" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>

@@ -3,7 +3,7 @@
 ────────────────────────────────────────────
 핵심 원칙
   1. Look-ahead bias 제거  : N일 종가 신호 → N+1일 시가 체결
-  2. 거래비용              : 슬리피지 0.05% + 수수료 0.10% = 편도 0.15%
+  2. 거래비용              : 슬리피지 0.05% + 수수료 0.10% = 편도 0.15% (기본값)
   3. 무위험 수익률         : 한국 국고채 3.5% (연)
   4. 연율화                : CAGR, Sharpe, Sortino, Calmar 모두 일별 → 연율
 
@@ -20,7 +20,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Literal
 
-COMMISSION   = 0.0015   # 편도 0.15% (수수료 + 슬리피지)
+COMMISSION   = 0.001    # 편도 수수료 0.10% (기본값)
+SLIPPAGE     = 0.0005   # 편도 슬리피지 0.05% (기본값)
 RF_ANNUAL    = 0.035    # 무위험 수익률 연 3.5%
 RF_DAILY     = (1 + RF_ANNUAL) ** (1 / 252) - 1
 TRADING_DAYS = 252
@@ -198,6 +199,7 @@ def _execute(
     bars:     list[Bar],
     initial:  float,
     signals:  list[int],   # +1=매수, -1=매도, 0=홀드  (N일 신호)
+    cost_rate: float = COMMISSION + SLIPPAGE,
 ) -> tuple[list[float], list[str], list[TradeLog]]:
     """
     signals[i] = bars[i] 종가 기준 신호
@@ -216,13 +218,13 @@ def _execute(
         if i > 0 and signals[i - 1] != 0:
             exec_price = bar.open
             if signals[i - 1] == 1 and shares == 0 and cash > 0:
-                cost    = cash * COMMISSION
+                cost    = cash * cost_rate
                 shares  = (cash - cost) / exec_price
                 trades.append(TradeLog(bar.date, "BUY",  exec_price, shares, cost))
                 cash    = 0.0
             elif signals[i - 1] == -1 and shares > 0:
                 proceeds = shares * exec_price
-                cost     = proceeds * COMMISSION
+                cost     = proceeds * cost_rate
                 cash     = proceeds - cost
                 trades.append(TradeLog(bar.date, "SELL", exec_price, shares, cost))
                 shares   = 0.0
@@ -238,9 +240,9 @@ def _execute(
 # 전략 1: Buy & Hold
 # ═══════════════════════════════════════════════
 
-def run_buy_hold(bars: list[Bar], initial: float) -> BacktestResult:
+def run_buy_hold(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     signals = [1] + [0] * (len(bars) - 1)
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="bah", strategy_label="Buy & Hold",
@@ -256,7 +258,7 @@ def run_buy_hold(bars: list[Bar], initial: float) -> BacktestResult:
 # 절대 모멘텀: 12개월 수익률 > 0이면 자산 보유, < 0이면 현금
 # 검증: 1974~2013 전 자산군에서 Buy&Hold 대비 MDD 50% 감소
 
-def run_dual_momentum(bars: list[Bar], initial: float) -> BacktestResult:
+def run_dual_momentum(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     closes  = [b.close for b in bars]
     n       = len(bars)
     LOOKBACK = min(252, n // 2)   # 12개월(252일) 모멘텀
@@ -269,7 +271,7 @@ def run_dual_momentum(bars: list[Bar], initial: float) -> BacktestResult:
         else:
             signals[i] = -1
 
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="dual_mom", strategy_label="Dual Momentum",
@@ -285,7 +287,7 @@ def run_dual_momentum(bars: list[Bar], initial: float) -> BacktestResult:
 # 10개월 SMA > 10개월 전 10개월 SMA (단기 > 장기) → 매수
 # 검증: 1900~2006 S&P500 CAGR +10.5% vs B&H +9.3%, MDD -50% 감소
 
-def run_sma_cross(bars: list[Bar], initial: float) -> BacktestResult:
+def run_sma_cross(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     closes  = [b.close for b in bars]
     n       = len(bars)
     S, L    = 10, 30              # Faber 원논문 10/30주 → 여기선 10/30일 (일봉 데이터)
@@ -304,7 +306,7 @@ def run_sma_cross(bars: list[Bar], initial: float) -> BacktestResult:
             signals[i] = -1
             prev_signal = -1
 
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="sma_cross", strategy_label=f"SMA {S}/{L} 크로스",
@@ -320,7 +322,7 @@ def run_sma_cross(bars: list[Bar], initial: float) -> BacktestResult:
 # 하단 밴드 이탈 → 매수, 상단 밴드 돌파 → 청산
 # 검증: Lo, Mamaysky & Wang (2000) "Foundations of Technical Analysis"
 
-def run_bollinger(bars: list[Bar], initial: float) -> BacktestResult:
+def run_bollinger(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     closes  = [b.close for b in bars]
     n       = len(bars)
     WINDOW  = 20
@@ -343,7 +345,7 @@ def run_bollinger(bars: list[Bar], initial: float) -> BacktestResult:
             signals[i]  = -1
             prev_signal = -1
 
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="bollinger", strategy_label="Bollinger Band (2σ)",
@@ -359,7 +361,7 @@ def run_bollinger(bars: list[Bar], initial: float) -> BacktestResult:
 # RSI < 30 과매도 → 매수, RSI > 70 과매수 → 청산
 # 검증: Wilder (1978), Pruitt & White (1988) 수익성 확인
 
-def run_rsi(bars: list[Bar], initial: float) -> BacktestResult:
+def run_rsi(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     closes  = [b.close for b in bars]
     n       = len(bars)
     PERIOD  = 14
@@ -379,7 +381,7 @@ def run_rsi(bars: list[Bar], initial: float) -> BacktestResult:
             signals[i]  = -1
             prev_signal = -1
 
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="rsi", strategy_label="RSI(14) 역추세",
@@ -395,7 +397,7 @@ def run_rsi(bars: list[Bar], initial: float) -> BacktestResult:
 # 5개 전략 중 60% 이상 동의 시 신호 발생
 # 논문: Dietterich (2000) "Ensemble Methods in Machine Learning"
 
-def run_ensemble(bars: list[Bar], initial: float) -> BacktestResult:
+def run_ensemble(bars: list[Bar], initial: float, cost_rate: float = COMMISSION + SLIPPAGE) -> BacktestResult:
     closes  = [b.close for b in bars]
     n       = len(bars)
     signals = [0] * n
@@ -443,7 +445,7 @@ def run_ensemble(bars: list[Bar], initial: float) -> BacktestResult:
         if   buy_ratio  >= THRESHOLD: signals[i] = 1
         elif sell_ratio >= THRESHOLD: signals[i] = -1
 
-    cv, cd, tr = _execute(bars, initial, signals)
+    cv, cd, tr = _execute(bars, initial, signals, cost_rate)
     m = _compute_metrics(cv, cd, initial, tr)
     return BacktestResult(
         strategy="ensemble", strategy_label="앙상블 (다수결)",
@@ -465,12 +467,24 @@ STRATEGIES = {
 }
 
 
-def run(bars: list[Bar], initial: float, strategy: str) -> BacktestResult:
+def run(
+    bars: list[Bar],
+    initial: float,
+    strategy: str,
+    commission_rate: float = COMMISSION,
+    slippage_rate: float = SLIPPAGE,
+) -> BacktestResult:
     fn = STRATEGIES.get(strategy)
     if fn is None:
         raise ValueError(f"Unknown strategy: {strategy}")
-    return fn(bars, initial)
+    return fn(bars, initial, commission_rate + slippage_rate)
 
 
-def run_all(bars: list[Bar], initial: float) -> list[BacktestResult]:
-    return [fn(bars, initial) for fn in STRATEGIES.values()]
+def run_all(
+    bars: list[Bar],
+    initial: float,
+    commission_rate: float = COMMISSION,
+    slippage_rate: float = SLIPPAGE,
+) -> list[BacktestResult]:
+    cost_rate = commission_rate + slippage_rate
+    return [fn(bars, initial, cost_rate) for fn in STRATEGIES.values()]

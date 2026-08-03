@@ -3,6 +3,7 @@
 실행: uvicorn main:app --reload --port 8000
 """
 import os
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -512,12 +513,14 @@ class BacktestRequest(BaseModel):
     )
     period: Literal["1M", "3M", "6M", "1Y"] = "1Y"
     initial: float = Field(10_000_000, gt=0, le=1_000_000_000_000)
-    strategy: Literal["all", "bah", "dual_mom", "sma_cross", "bollinger", "rsi"] = "all"
+    strategy: Literal["all", "ensemble", "bah", "dual_mom", "sma_cross", "bollinger", "rsi"] = "all"
+    commission_bps: float = Field(10.0, ge=0, le=500, description="편도 수수료 (basis points)")
+    slippage_bps: float = Field(5.0, ge=0, le=500, description="편도 슬리피지 (basis points)")
 
 
 @app.post("/api/backtest")
 async def run_backtest(req: BacktestRequest):
-    """논문 기반 백테스트 — look-ahead bias 제거, 거래비용 0.15% 반영."""
+    """논문 기반 백테스트 — look-ahead bias 제거, 수수료·슬리피지 반영."""
     try:
         chart = await get_chart(req.ticker, req.period)
     except Exception:
@@ -526,6 +529,39 @@ async def run_backtest(req: BacktestRequest):
     candles = chart.get("candles", []) if isinstance(chart, dict) else []
     if len(candles) < 10:
         raise HTTPException(status_code=400, detail="데이터 부족 (최소 10개 캔들 필요)")
+    if len(candles) < 20:
+        raise HTTPException(status_code=400, detail="데이터 부족 (기간 분할 검증에 최소 20개 캔들 필요)")
+
+    try:
+        parsed_dates = [datetime.fromisoformat(str(c.get("date"))) for c in candles]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="가격 데이터 날짜 형식이 올바르지 않습니다")
+    try:
+        dates_out_of_order = any(current <= previous for previous, current in zip(parsed_dates, parsed_dates[1:]))
+    except TypeError:
+        # naive date와 timezone-aware datetime을 섞으면 Python 비교가 실패하므로
+        # 내부 500 대신 입력 오류로 닫는다.
+        raise HTTPException(status_code=400, detail="가격 데이터 날짜 형식이 일관되지 않습니다")
+    if dates_out_of_order:
+        raise HTTPException(status_code=400, detail="가격 데이터 날짜 순서가 올바르지 않습니다")
+
+    for candle in candles:
+        try:
+            open_price = float(candle["open"])
+            high_price = float(candle["high"])
+            low_price = float(candle["low"])
+            close_price = float(candle["close"])
+            volume = float(candle.get("volume", 0))
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="가격 데이터 수치 형식이 올바르지 않습니다")
+        if (
+            not all(math.isfinite(value) for value in (open_price, high_price, low_price, close_price, volume))
+            or min(open_price, high_price, low_price, close_price) <= 0
+            or volume < 0
+            or high_price < max(open_price, close_price)
+            or low_price > min(open_price, close_price)
+        ):
+            raise HTTPException(status_code=400, detail="가격 데이터 OHLC 범위가 올바르지 않습니다")
 
     bars = [
         bt.Bar(
@@ -536,12 +572,23 @@ async def run_backtest(req: BacktestRequest):
     ]
 
     try:
+        commission_rate = req.commission_bps / 10_000
+        slippage_rate = req.slippage_bps / 10_000
         if req.strategy == "all":
-            results = bt.run_all(bars, req.initial)
+            results = bt.run_all(bars, req.initial, commission_rate, slippage_rate)
         else:
-            results = [bt.run(bars, req.initial, req.strategy)]
+            results = [bt.run(bars, req.initial, req.strategy, commission_rate, slippage_rate)]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    split_index = int(len(bars) * 0.7)
+    train_bars, test_bars = bars[:split_index], bars[split_index:]
+    if req.strategy == "all":
+        train_results = bt.run_all(train_bars, req.initial, commission_rate, slippage_rate)
+        test_results = bt.run_all(test_bars, req.initial, commission_rate, slippage_rate)
+    else:
+        train_results = [bt.run(train_bars, req.initial, req.strategy, commission_rate, slippage_rate)]
+        test_results = [bt.run(test_bars, req.initial, req.strategy, commission_rate, slippage_rate)]
 
     def serialize(r: bt.BacktestResult) -> dict:
         return {
@@ -566,11 +613,104 @@ async def run_backtest(req: BacktestRequest):
             "paper":            r.paper,
         }
 
+    walk_forward = {
+        "method": "expanding_window",
+        "available": False,
+        "folds": [],
+        "reason": "워크포워드 검증에는 최소 60개 캔들이 필요합니다",
+    }
+    if len(bars) >= 60:
+        fold_count = 3
+        test_window = max(10, len(bars) // 10)
+        initial_train_end = len(bars) - fold_count * test_window
+        folds = []
+        for fold_index in range(fold_count):
+            train_end = initial_train_end + fold_index * test_window
+            test_end = train_end + test_window
+            fold_bars = bars[train_end:test_end]
+            fold_results = (
+                bt.run_all(fold_bars, req.initial, commission_rate, slippage_rate)
+                if req.strategy == "all"
+                else [bt.run(fold_bars, req.initial, req.strategy, commission_rate, slippage_rate)]
+            )
+            folds.append({
+                "fold": fold_index + 1,
+                "train_end": bars[train_end - 1].date,
+                "test_start": bars[train_end].date,
+                "test_end": bars[test_end - 1].date,
+                "test_samples": len(fold_bars),
+                "results": [serialize(result) for result in fold_results],
+            })
+        walk_forward = {
+            "method": "expanding_window",
+            "available": True,
+            "folds": folds,
+            "reason": None,
+        }
+
+    # 단일 전략 조회에서도 동일 비용 가정의 Buy & Hold 기준선을 함께 제공한다.
+    # `all` 모드에서는 이미 결과에 포함된 기준선을 재사용해 중복 계산을 피한다.
+    benchmark_result = next((r for r in results if r.strategy == "bah"), None)
+    if benchmark_result is None and req.strategy != "bah":
+        benchmark_result = bt.run_buy_hold(
+            bars,
+            req.initial,
+            commission_rate + slippage_rate,
+        )
+
+    train_by_strategy = {r.strategy: r for r in train_results}
+    test_by_strategy = {r.strategy: r for r in test_results}
+    validation = []
+    for strategy, train_result in train_by_strategy.items():
+        test_result = test_by_strategy[strategy]
+        validation.append({
+            "strategy": strategy,
+            "strategy_label": test_result.strategy_label,
+            "train_return_pct": train_result.total_return_pct,
+            "test_return_pct": test_result.total_return_pct,
+            "test_mdd": test_result.mdd,
+            "test_sharpe": test_result.sharpe,
+        })
+
     return {
         "ticker":  req.ticker.upper(),
         "period":  req.period,
+        "execution_mode": "paper",
+        "live_allowed": False,
+        "costs": {
+            "commission_bps": req.commission_bps,
+            "slippage_bps": req.slippage_bps,
+            "total_bps": req.commission_bps + req.slippage_bps,
+        },
         "source": chart.get("source", "Unknown provider"),
         "fetched_at": chart.get("fetched_at"),
+        "benchmark": (
+            {
+                "strategy": benchmark_result.strategy,
+                "strategy_label": benchmark_result.strategy_label,
+                "final": benchmark_result.final,
+                "total_return_pct": benchmark_result.total_return_pct,
+                "mdd": benchmark_result.mdd,
+            }
+            if benchmark_result is not None
+            else None
+        ),
+        "validation": {
+            "method": "chronological_holdout",
+            "label": "시간순 홀드아웃",
+            "train_ratio": 0.7,
+            "train_samples": len(train_bars),
+            "test_samples": len(test_bars),
+            "warning": (
+                "검증 표본이 30개 미만이라 Sharpe 해석에 주의가 필요합니다"
+                if len(test_bars) < 30
+                else None
+            ),
+            "train_end": train_bars[-1].date,
+            "test_start": test_bars[0].date,
+            "results": validation,
+        },
+        "walk_forward": walk_forward,
         "results": [serialize(r) for r in results],
     }
 

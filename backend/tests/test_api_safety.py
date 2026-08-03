@@ -281,9 +281,8 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(payload["validation"]["train_samples"], 56)
         self.assertEqual(payload["validation"]["test_samples"], 24)
         self.assertEqual(payload["validation"]["warning"], "검증 표본이 30개 미만이라 Sharpe 해석에 주의가 필요합니다")
-        self.assertTrue(payload["walk_forward"]["available"])
-        self.assertEqual(len(payload["walk_forward"]["folds"]), 3)
-        self.assertTrue(all(len(fold["results"]) == 6 for fold in payload["walk_forward"]["folds"]))
+        self.assertFalse(payload["walk_forward"]["available"])
+        self.assertEqual(payload["walk_forward"]["folds"], [])
         self.assertEqual(len(payload["validation"]["results"]), 6)
         self.assertEqual(len(payload["results"]), 6)
         self.assertTrue(all(result["curve"] for result in payload["results"]))
@@ -298,16 +297,17 @@ class ApiSafetyContractTests(unittest.TestCase):
                 "close": 100 + i * 0.1,
                 "volume": 1_000,
             }
-            for i in range(100)
+            for i in range(180)
         ]
         with patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": long_candles, "source": "fixture"})):
             long_response = self.client.post("/api/backtest", json={"ticker": "BTC", "strategy": "bah"})
         self.assertEqual(long_response.status_code, 200)
-        self.assertEqual(long_response.json()["validation"]["test_samples"], 30)
+        self.assertEqual(long_response.json()["validation"]["test_samples"], 55)
         self.assertIsNone(long_response.json()["validation"]["warning"])
         self.assertTrue(long_response.json()["walk_forward"]["available"])
         self.assertEqual(len(long_response.json()["walk_forward"]["folds"]), 3)
-        self.assertEqual(long_response.json()["walk_forward"]["folds"][0]["test_samples"], 10)
+        self.assertEqual(long_response.json()["walk_forward"]["folds"][0]["test_samples"], 30)
+        self.assertTrue(all(len(fold["results"]) == 1 for fold in long_response.json()["walk_forward"]["folds"]))
 
     def test_backtest_cost_inputs_change_paper_result_and_are_returned(self) -> None:
         candles = [

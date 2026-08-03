@@ -617,11 +617,11 @@ async def run_backtest(req: BacktestRequest):
         "method": "expanding_window",
         "available": False,
         "folds": [],
-        "reason": "워크포워드 검증에는 최소 60개 캔들이 필요합니다",
+        "reason": "워크포워드 검증에는 최소 180개 캔들이 필요합니다",
     }
-    if len(bars) >= 60:
+    if len(bars) >= 180:
         fold_count = 3
-        test_window = max(10, len(bars) // 10)
+        test_window = max(30, len(bars) // 10)
         initial_train_end = len(bars) - fold_count * test_window
         folds = []
         for fold_index in range(fold_count):

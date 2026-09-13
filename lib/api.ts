@@ -2,11 +2,12 @@
  * FastAPI 백엔드 호출 유틸 (v2 — 멀티마켓)
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "@/lib/apiBase";
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...options,
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...options?.headers },
     cache: "no-store",
   });
@@ -140,6 +141,7 @@ export async function getIndices(): Promise<IndexPrice[]> {
 export async function checkHealth(): Promise<boolean> {
   try {
     const r = await fetch(`${API_BASE}/health`, {
+      credentials: "include",
       signal: AbortSignal.timeout(1500),
       cache: "no-store",
     });

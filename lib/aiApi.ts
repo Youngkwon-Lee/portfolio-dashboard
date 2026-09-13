@@ -2,7 +2,7 @@
  * AI 분석 API 유틸 (SSE 스트리밍 지원)
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "@/lib/apiBase";
 
 // ── SSE 스트리밍 헬퍼 ─────────────────────────
 
@@ -14,6 +14,7 @@ export async function streamPost(
 ): Promise<void> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -87,6 +88,7 @@ export async function getAIStrategies(
 ): Promise<Strategy[]> {
   const res = await fetch(`${API_BASE}/api/analyze/strategies`, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ holdings, total_value: totalValue, risk_appetite: riskAppetite }),
   });

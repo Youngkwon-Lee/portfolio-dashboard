@@ -1,8 +1,7 @@
 "use client";
 import { useState } from "react";
 import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "@/lib/apiBase";
 
 type WalletType = "phantom" | "metamask";
 
@@ -131,7 +130,7 @@ export default function SettingsPage() {
     if (!phantomAddr.trim()) return;
     setPhantomResult((p) => ({ ...p, loading: true, error: "", data: null }));
     try {
-      const res = await fetch(`${API_BASE}/api/wallet/phantom/${phantomAddr.trim()}`);
+      const res = await fetch(`${API_BASE}/api/wallet/phantom/${phantomAddr.trim()}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setPhantomResult({ type: "phantom", data, error: "", loading: false });
@@ -145,7 +144,7 @@ export default function SettingsPage() {
     if (!mmAddr.trim()) return;
     setMmResult((p) => ({ ...p, loading: true, error: "", data: null }));
     try {
-      const res = await fetch(`${API_BASE}/api/wallet/metamask/${mmAddr.trim()}`);
+      const res = await fetch(`${API_BASE}/api/wallet/metamask/${mmAddr.trim()}`, { credentials: "include" });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setMmResult({ type: "metamask", data, error: "", loading: false });

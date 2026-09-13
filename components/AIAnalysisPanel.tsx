@@ -4,8 +4,7 @@ import { useBalance } from "@/hooks/usePortfolio";
 import { streamPortfolioAnalysis, getAIStrategies, streamChat } from "@/lib/aiApi";
 import type { Strategy } from "@/lib/aiApi";
 import { aiInsights } from "@/lib/mockData";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/apiBase";
 
 type Tab = "analysis" | "strategy" | "chat" | "news";
 type RiskAppetite = "aggressive" | "balanced" | "conservative";
@@ -53,7 +52,7 @@ export default function AIAnalysisPanel() {
   async function fetchNews(ticker: string) {
     setNewsLoading(true);
     try {
-      const r = await fetch(`${API}/api/news/${ticker}`);
+      const r = await fetch(`${API}/api/news/${ticker}`, { credentials: "include" });
       setNewsData(await r.json());
     } catch {}
     finally { setNewsLoading(false); }

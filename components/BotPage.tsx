@@ -2,8 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { Gauge, LockKeyhole, OctagonX, Play, ShieldCheck, Square, TriangleAlert } from "lucide-react";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/apiBase";
 
 // ── 타입 ──────────────────────────────────────────
 
@@ -78,6 +77,15 @@ function fmtTime(iso: string) {
   return new Date(iso).toLocaleString("ko-KR", { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" });
 }
 
+async function apiFailureMessage(response: Response, fallback: string) {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (response.redirected || !contentType.includes("application/json")) {
+    return "API Access 로그인 세션이 필요합니다. 아래 API 확인 링크를 먼저 열고 로그인한 뒤 이 화면을 새로고침하세요.";
+  }
+  const payload = await response.json().catch(() => null);
+  return typeof payload?.detail === "string" ? payload.detail : fallback;
+}
+
 // ── 서브 컴포넌트 ─────────────────────────────────
 
 function StatCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
@@ -128,15 +136,34 @@ export default function BotPage() {
   const [strategy,  setStrategy]  = useState("dual_mom");
   const [symbols,   setSymbols]   = useState<string[]>(["BTC", "ETH"]);
   const [capital,   setCapital]   = useState("1000000");
+  const [operatorToken, setOperatorToken] = useState("");
+  const [operatorError, setOperatorError] = useState("");
   const [starting,  setStarting]  = useState(false);
   const [activeTab, setActiveTab] = useState<"signals"|"positions"|"trades">("signals");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchStatus() {
     try {
-      const r = await fetch(`${API}/api/bot/status`);
-      if (r.ok) setStatus(await r.json());
-    } catch {}
+      const r = await fetch(`${API}/api/bot/status`, { credentials: "include" });
+      if (!r.ok) {
+        setOperatorError(await apiFailureMessage(r, "Paper 봇 상태를 불러오지 못했습니다."));
+        return;
+      }
+      const contentType = r.headers.get("content-type") ?? "";
+      if (r.redirected || !contentType.includes("application/json")) {
+        setOperatorError("API Access 로그인 세션이 필요합니다. 아래 API 확인 링크를 먼저 열고 로그인한 뒤 이 화면을 새로고침하세요.");
+        return;
+      }
+      setStatus(await r.json());
+    } catch {
+      setOperatorError("API에 연결할 수 없습니다. 네트워크와 Cloudflare Access 로그인 상태를 확인하세요.");
+    }
+  }
+
+  function operatorHeaders(): Record<string, string> {
+    return operatorToken.trim()
+      ? { Authorization: `Bearer ${operatorToken.trim()}` }
+      : {};
   }
 
   useEffect(() => {
@@ -146,34 +173,61 @@ export default function BotPage() {
   }, []);
 
   async function handleStart() {
+    if (!operatorToken.trim()) {
+      setOperatorError("Paper 제어를 사용하려면 운영자 토큰을 입력하세요.");
+      return;
+    }
     setStarting(true);
+    setOperatorError("");
     try {
       const r = await fetch(`${API}/api/bot/start`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: { "Content-Type": "application/json", ...operatorHeaders() },
         body: JSON.stringify({
           mode: "paper", strategy, symbols,
           initial_capital: Number(capital),
         }),
       });
       if (!r.ok) {
-        const e = await r.json();
-        alert(e.detail ?? "시작 실패");
+        setOperatorError(await apiFailureMessage(r, "Paper 봇 시작에 실패했습니다."));
       } else {
         await fetchStatus();
       }
+    } catch {
+      setOperatorError("API에 연결할 수 없습니다. Cloudflare Access 로그인 후 다시 시도하세요.");
     } finally {
       setStarting(false);
     }
   }
 
   async function handleStop() {
-    await fetch(`${API}/api/bot/stop`, { method: "POST" });
+    setOperatorError("");
+    try {
+      const r = await fetch(`${API}/api/bot/stop`, {
+        method: "POST",
+        credentials: "include",
+        headers: operatorHeaders(),
+      });
+      if (!r.ok) setOperatorError(await apiFailureMessage(r, "Paper 봇 정지에 실패했습니다."));
+    } catch {
+      setOperatorError("API에 연결할 수 없습니다. Cloudflare Access 로그인 후 다시 시도하세요.");
+    }
     await fetchStatus();
   }
 
   async function handleKillSwitch() {
-    await fetch(`${API}/api/bot/kill-switch`, { method: "POST" });
+    setOperatorError("");
+    try {
+      const r = await fetch(`${API}/api/bot/kill-switch`, {
+        method: "POST",
+        credentials: "include",
+        headers: operatorHeaders(),
+      });
+      if (!r.ok) setOperatorError(await apiFailureMessage(r, "Kill switch 실행에 실패했습니다."));
+    } catch {
+      setOperatorError("API에 연결할 수 없습니다. Cloudflare Access 로그인 후 다시 시도하세요.");
+    }
     await fetchStatus();
   }
 
@@ -212,6 +266,44 @@ export default function BotPage() {
             </div>
           </div>
         </div>
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-semibold" style={{ color: "var(--muted)" }}>Paper 운영자 토큰</span>
+          <input
+            type="password"
+            value={operatorToken}
+            onChange={(event) => {
+              setOperatorToken(event.target.value);
+              setOperatorError("");
+            }}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="서버 운영자 토큰 입력"
+            aria-describedby="operator-token-help"
+            className="px-3 py-2 rounded text-xs outline-none"
+            style={{ background: "#0d1117", color: "var(--foreground)", border: "1px solid var(--card-border)" }}
+          />
+          <span id="operator-token-help" className="text-xs leading-relaxed" style={{ color: "var(--muted)" }}>
+            이 브라우저 탭의 메모리에만 유지되며 저장하지 않습니다.
+          </span>
+          {API && (
+            <a
+              href={`${API}/health`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs underline underline-offset-2"
+              style={{ color: "var(--accent-blue)" }}
+            >
+              API Access 로그인·연결 확인
+            </a>
+          )}
+        </label>
+
+        {operatorError && (
+          <div className="text-xs leading-relaxed" role="alert" style={{ color: "var(--accent-red)" }}>
+            {operatorError}
+          </div>
+        )}
 
         {/* 모드 선택 */}
         <div className="flex flex-col gap-1.5">

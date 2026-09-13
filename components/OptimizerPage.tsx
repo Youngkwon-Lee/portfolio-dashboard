@@ -4,8 +4,7 @@ import {
   ScatterChart, Scatter, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceDot, Cell,
 } from "recharts";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE as API } from "@/lib/apiBase";
 
 interface PortfolioResult {
   weights: Record<string, number>;
@@ -23,6 +22,16 @@ interface OptResult {
   correlation:        number[][];
   annual_returns:     Record<string, number>;
   volatilities:       Record<string, number>;
+  methodology: {
+    optimizer: string;
+    objectives: string[];
+    reproducible: boolean;
+    seed: number;
+    paper_only: boolean;
+    warning: string;
+  };
+  execution_mode: "paper";
+  live_allowed: false;
 }
 
 const PRESET_GROUPS = [
@@ -75,10 +84,15 @@ export default function OptimizerPage() {
     try {
       const r = await fetch(`${API}/api/optimize`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tickers: t, period }),
       });
-      if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
+      if (!r.ok) {
+        const e = await r.json();
+        const detail = typeof e.detail === "string" ? e.detail : e.detail?.message;
+        throw new Error(detail ?? "최적화 요청이 거부되었습니다.");
+      }
       const data = await r.json();
       setResult(data);
       setTickerInput(t.join(", "));
@@ -141,6 +155,11 @@ export default function OptimizerPage() {
 
       {result && (
         <>
+          <div className="px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-3" style={{ background: "#58a6ff14", color: "var(--accent-blue)", border: "1px solid #58a6ff44" }}>
+            <span><b>PAPER ONLY</b> · 결과는 주문·계좌에 연결되지 않습니다.</span>
+            <span style={{ color: "var(--muted)" }}>재현 가능한 시드 {result.methodology.seed}</span>
+          </div>
+
           {/* 포트폴리오 비교 카드 */}
           <div className="grid grid-cols-4 gap-2">
             {Object.entries(PORT_LABELS).map(([key, meta]) => {
@@ -250,6 +269,10 @@ export default function OptimizerPage() {
                 상관계수가 낮을수록 분산 효과가 큽니다. 0.8 이상이면 사실상 같은 방향으로 움직입니다.
               </div>
             </div>
+          </div>
+
+          <div className="text-xs" style={{ color: "var(--muted)" }}>
+            {result.methodology.warning} 실시간 시장 데이터 읽기는 서버의 명시적 paper 게이트가 열려 있을 때만 가능합니다.
           </div>
         </>
       )}

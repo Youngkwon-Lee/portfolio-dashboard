@@ -19,6 +19,8 @@ os.environ["TRADING_SAFETY_STATE_PATH"] = str(
     Path(TEST_RUNTIME.name) / "api-safety.json"
 )
 
+from fastapi import HTTPException  # noqa: E402
+from fastapi.security import HTTPAuthorizationCredentials  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 import main  # noqa: E402
 
@@ -39,11 +41,116 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["execution_mode"], "paper")
         self.assertFalse(health.json()["live_allowed"])
+        self.assertFalse(health.json()["external_market_reads_allowed"])
 
         safety = self.client.get("/api/trading/safety")
         self.assertEqual(safety.status_code, 200)
         self.assertEqual(safety.json()["execution_mode"], "paper")
         self.assertFalse(safety.json()["credential_input_allowed"])
+
+    def test_security_headers_are_present(self) -> None:
+        response = self.client.get("/health")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(response.headers["x-frame-options"], "DENY")
+
+    def test_api_body_limit_rejects_oversized_payload(self) -> None:
+        response = self.client.post(
+            "/api/chat",
+            content=b"x" * (main.API_MAX_REQUEST_BODY_BYTES + 1),
+            headers={"content-type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 413)
+
+    def test_api_rate_limit_blocks_after_configured_window_budget(self) -> None:
+        main._api_request_times.clear()
+        with patch.object(main, "API_RATE_LIMIT", 2):
+            responses = [self.client.get("/api/trading/safety") for _ in range(3)]
+        main._api_request_times.clear()
+
+        self.assertEqual([response.status_code for response in responses[:2]], [200, 200])
+        self.assertEqual(responses[2].status_code, 429)
+        self.assertEqual(responses[2].headers["retry-after"], "60")
+
+    def test_production_operator_controls_fail_closed_without_token(self) -> None:
+        with (
+            patch.object(main, "IS_PRODUCTION", True),
+            patch.dict(os.environ, {"PAPER_OPERATOR_TOKEN": ""}, clear=False),
+            patch.object(main.bot, "stop", new=AsyncMock()) as stop,
+        ):
+            response = self.client.post("/api/bot/stop")
+
+        self.assertEqual(response.status_code, 503)
+        stop.assert_not_awaited()
+
+    def test_production_operator_controls_accept_bearer_token(self) -> None:
+        with (
+            patch.object(main, "IS_PRODUCTION", True),
+            patch.dict(os.environ, {"PAPER_OPERATOR_TOKEN": "test-operator-token"}, clear=False),
+            patch.object(main.bot, "stop", new=AsyncMock()) as stop,
+        ):
+            missing = self.client.post("/api/bot/stop")
+            accepted = self.client.post(
+                "/api/bot/stop",
+                headers={"Authorization": "Bearer test-operator-token"},
+            )
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(accepted.status_code, 200)
+        stop.assert_awaited_once()
+
+    def test_malformed_non_ascii_operator_token_fails_closed(self) -> None:
+        with (
+            patch.object(main, "IS_PRODUCTION", True),
+            patch.dict(os.environ, {"PAPER_OPERATOR_TOKEN": "test-operator-token"}, clear=False),
+        ):
+            with self.assertRaises(HTTPException) as error:
+                main.require_operator(
+                    HTTPAuthorizationCredentials(
+                        scheme="Bearer",
+                        credentials="운영자토큰",
+                    )
+                )
+
+        self.assertEqual(error.exception.status_code, 401)
+
+    def test_ai_rate_limit_blocks_after_twenty_requests(self) -> None:
+        main._ai_request_times.clear()
+        with patch.object(
+            main,
+            "_check_api_key",
+            side_effect=HTTPException(status_code=503, detail="fixture"),
+        ):
+            responses = [
+                self.client.post(
+                    "/api/analyze/stock",
+                    json={"ticker": "BTC", "price_data": {}},
+                )
+                for _ in range(21)
+            ]
+        main._ai_request_times.clear()
+
+        self.assertEqual([response.status_code for response in responses[:20]], [503] * 20)
+        self.assertEqual(responses[20].status_code, 429)
+
+    def test_provider_fanout_limits_reject_before_downstream_calls(self) -> None:
+        prices = ",".join(f"TICKER{i}" for i in range(21))
+        news_tickers = ",".join(f"BTC{i}" for i in range(21))
+        markets = ",".join(f"M{i}" for i in range(21))
+        with (
+            patch.object(main.us, "get_us_price", new=AsyncMock()) as us_price,
+            patch.object(main.news, "analyze_portfolio", new=AsyncMock()) as news_analysis,
+            patch.object(main.upbit, "get_ticker", new=AsyncMock()) as upbit_ticker,
+        ):
+            price_response = self.client.get(f"/api/prices?tickers={prices}")
+            news_response = self.client.get(f"/api/news?tickers={news_tickers}")
+            upbit_response = self.client.get(f"/api/upbit/ticker?markets={markets}")
+
+        self.assertEqual(price_response.status_code, 400)
+        self.assertEqual(news_response.status_code, 400)
+        self.assertEqual(upbit_response.status_code, 400)
+        us_price.assert_not_awaited()
+        news_analysis.assert_not_awaited()
+        upbit_ticker.assert_not_awaited()
 
     def test_kis_order_endpoint_blocks_before_client_call(self) -> None:
         with patch.object(main.kis, "place_order", new=AsyncMock()) as downstream:
@@ -317,6 +424,66 @@ class ApiSafetyContractTests(unittest.TestCase):
         gate = long_response.json()["promotion_gate"]
         self.assertTrue(gate["paper_only"])
         self.assertEqual(gate["eligible_strategies"], ["bah"])
+        robustness = long_response.json()["robustness"]
+        self.assertTrue(robustness["paper_only"])
+        self.assertEqual(robustness["method"], "CSCV_PBO_and_Deflated_Sharpe")
+        self.assertFalse(robustness["pbo"]["available"])
+
+    def test_indices_are_fail_closed_without_market_read_gate(self) -> None:
+        with (
+            patch.dict(os.environ, {"PAPER_EXTERNAL_MARKET_READS": "false"}, clear=False),
+            patch.object(main.kis, "_get", new=AsyncMock()) as kis_get,
+            patch.object(main.us, "get_global_indices", new=AsyncMock()) as global_indices,
+            patch.object(main.us, "get_crypto_price", new=AsyncMock()) as crypto_price,
+        ):
+            response = self.client.get("/api/indices")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        kis_get.assert_not_awaited()
+        global_indices.assert_not_awaited()
+        crypto_price.assert_not_awaited()
+
+    def test_optimizer_is_fail_closed_without_market_read_gate(self) -> None:
+        with patch.object(main, "get_chart", new=AsyncMock()) as get_chart:
+            response = self.client.post(
+                "/api/optimize",
+                json={"tickers": ["BTC", "ETH"], "period": "1Y"},
+            )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"]["code"], "external_market_reads_disabled")
+        get_chart.assert_not_awaited()
+
+    def test_optimizer_contract_is_paper_only_when_gate_is_explicit(self) -> None:
+        candles = [
+            {"date": f"2026-01-{i + 1:02d}", "close": 100 + i, "open": 100 + i, "high": 101 + i, "low": 99 + i, "volume": 1}
+            for i in range(20)
+        ]
+        with (
+            patch.dict(os.environ, {"PAPER_EXTERNAL_MARKET_READS": "true"}, clear=False),
+            patch.object(main, "get_chart", new=AsyncMock(return_value={"candles": candles})) as get_chart,
+            patch.object(main.opt, "optimize", return_value={"execution_mode": "paper", "live_allowed": False}) as optimize,
+        ):
+            response = self.client.post("/api/optimize", json={"tickers": ["BTC", "ETH"], "period": "1Y"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"execution_mode": "paper", "live_allowed": False})
+        self.assertEqual(get_chart.await_count, 2)
+        optimize.assert_called_once()
+
+    def test_optimizer_rejects_invalid_or_duplicate_tickers_before_lookup(self) -> None:
+        with (
+            patch.dict(os.environ, {"PAPER_EXTERNAL_MARKET_READS": "true"}, clear=False),
+            patch.object(main, "get_chart", new=AsyncMock()) as get_chart,
+        ):
+            duplicate = self.client.post("/api/optimize", json={"tickers": ["BTC", " btc "], "period": "1Y"})
+            invalid = self.client.post("/api/optimize", json={"tickers": ["BTC", "bad ticker"], "period": "1Y"})
+
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(duplicate.json(), {"detail": "중복 티커는 허용되지 않습니다"})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.json(), {"detail": "티커 형식이 올바르지 않습니다"})
+        get_chart.assert_not_awaited()
 
     def test_backtest_cost_inputs_change_paper_result_and_are_returned(self) -> None:
         candles = [
@@ -376,6 +543,22 @@ class ApiSafetyContractTests(unittest.TestCase):
         self.assertTrue(payload["fetched_at"])
         self.assertEqual(payload["candles"], candles)
         provider.assert_awaited_once_with("AAPL", "1M")
+
+    def test_market_and_wallet_provider_errors_are_sanitized(self) -> None:
+        marker = "provider-secret-must-not-echo"
+        with (
+            patch.object(main.us, "get_us_price", new=AsyncMock(side_effect=RuntimeError(marker))),
+            patch.object(main.wallet, "get_phantom_balance", new=AsyncMock(side_effect=RuntimeError(marker))),
+        ):
+            price = self.client.get("/api/price/AAPL")
+            wallet = self.client.get("/api/wallet/phantom/fixture-address")
+
+        self.assertEqual(price.status_code, 502)
+        self.assertEqual(price.json(), {"detail": "시장 데이터 조회 실패"})
+        self.assertNotIn(marker, price.text)
+        self.assertEqual(wallet.status_code, 502)
+        self.assertEqual(wallet.json(), {"detail": "지갑 데이터 조회 실패"})
+        self.assertNotIn(marker, wallet.text)
 
     def test_paper_start_stop_contract_never_uses_live_provider(self) -> None:
         with (

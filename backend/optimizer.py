@@ -80,14 +80,16 @@ def _optimize(
     n_restarts: int = 30,
     n_steps:    int = 2000,
     lr:         float = 0.01,
+    rng: random.Random | None = None,
 ) -> list[float]:
+    rng = rng or random.Random(0)
     n = len(returns)
     best_w = [1 / n] * n
     best_score = float("-inf")
 
     for _ in range(n_restarts):
         # 랜덤 초기화
-        w = _softmax_project([random.random() for _ in range(n)])
+        w = _softmax_project([rng.random() for _ in range(n)])
 
         for step in range(n_steps):
             lr_t = lr * (0.995 ** (step // 100))  # 학습률 감소
@@ -146,6 +148,7 @@ def _optimize(
 def optimize(
     tickers:       list[str],
     price_history: dict[str, list[float]],   # ticker → 일별 종가 리스트
+    seed: int = 0,
 ) -> dict:
     """
     포트폴리오 최적화 결과 반환.
@@ -197,15 +200,16 @@ def optimize(
         }
 
     # 4가지 포트폴리오
-    w_sharpe = _optimize(ann_returns, cov, "sharpe",      n_restarts=20)
-    w_minvol = _optimize(ann_returns, cov, "min_vol",     n_restarts=20)
-    w_rp     = _optimize(ann_returns, cov, "risk_parity", n_restarts=20)
+    rng = random.Random(seed)
+    w_sharpe = _optimize(ann_returns, cov, "sharpe",      n_restarts=20, rng=rng)
+    w_minvol = _optimize(ann_returns, cov, "min_vol",     n_restarts=20, rng=rng)
+    w_rp     = _optimize(ann_returns, cov, "risk_parity", n_restarts=20, rng=rng)
     w_eq     = [1 / n] * n
 
     # 효율적 프론티어 (50개 포인트 샘플링)
     frontier = []
     for _ in range(50):
-        w = _softmax_project([random.random() for _ in range(n)])
+        w = _softmax_project([rng.random() for _ in range(n)])
         ret, vol, sharpe = _portfolio_stats(w, ann_returns, cov)
         frontier.append({"vol": round(vol*100,2), "ret": round(ret*100,2), "sharpe": round(sharpe,3)})
     frontier.sort(key=lambda x: x["vol"])
@@ -220,4 +224,14 @@ def optimize(
         "correlation":        [[round(corr[i][j], 3) for j in range(n)] for i in range(n)],
         "annual_returns":     {tickers[i]: round(ann_returns[i]*100, 2) for i in range(n)},
         "volatilities":       {tickers[i]: round(vols[i]*100, 2) for i in range(n)},
+        "methodology": {
+            "optimizer": "long-only Markowitz with numerical gradient descent",
+            "objectives": ["max_sharpe", "min_vol", "risk_parity", "equal_weight"],
+            "reproducible": True,
+            "seed": seed,
+            "paper_only": True,
+            "warning": "추정치는 과거 가격 표본에 기반하며 주문·계좌 연결을 하지 않습니다.",
+        },
+        "execution_mode": "paper",
+        "live_allowed": False,
     }

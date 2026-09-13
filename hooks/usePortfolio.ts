@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { checkHealth, getBalance, getChart, getPrice, getIndices } from "@/lib/api";
 import type { Balance, Candle, StockPrice, IndexPrice } from "@/lib/api";
 import { portfolioSummary, holdings, samsungPriceData, marketIndices } from "@/lib/mockData";
+import { EXTERNAL_MARKET_READS_ENABLED } from "@/lib/runtimePolicy";
 
 // ── 백엔드 상태 (싱글톤, 30초 캐시) ──────────────
 
@@ -87,6 +88,18 @@ export function useChart(ticker: string, period: "1M" | "3M" | "6M" | "1Y") {
     let active = true;
     setLoading(true);
 
+    if (!EXTERNAL_MARKET_READS_ENABLED) {
+      const sliceMap = { "1M": 20, "3M": 40, "6M": 55, "1Y": 60 };
+      setCandles(
+        samsungPriceData.slice(-sliceMap[period]).map((d) => ({
+          date: d.date, open: d.open, high: d.high,
+          low: d.low, close: d.close, volume: d.volume,
+        }))
+      );
+      setLoading(false);
+      return () => { active = false; };
+    }
+
     isBackendUp().then(async (up) => {
       if (!active) return;
 
@@ -130,6 +143,10 @@ export function usePrice(ticker: string) {
   useEffect(() => {
     let active = true;
 
+    if (!EXTERNAL_MARKET_READS_ENABLED) {
+      return () => { active = false; };
+    }
+
     const load = async () => {
       const up = await isBackendUp();
       if (!up || !active) return;
@@ -166,6 +183,10 @@ export function useIndices() {
   useEffect(() => {
     let active = true;
 
+    if (!EXTERNAL_MARKET_READS_ENABLED) {
+      return () => { active = false; };
+    }
+
     const load = async () => {
       const up = await isBackendUp();
       if (!up || !active) return;
@@ -192,6 +213,7 @@ export function useMultiPrice(tickers: string[], intervalMs = 15_000) {
 
   useEffect(() => {
     if (!tickers.length) return;
+    if (!EXTERNAL_MARKET_READS_ENABLED) return;
     let active = true;
 
     const load = async () => {

@@ -69,6 +69,7 @@ class BacktestResult:
     trades:           list[dict]
     description:      str
     paper:            str
+    daily_returns:    list[float] = field(default_factory=list, repr=False)
 
 
 # ── 지표 계산 ───────────────────────────────────
@@ -189,6 +190,7 @@ def _compute_metrics(
         "total_cost":     round(total_cost, 0),
         "curve":          curve,
         "monthly_returns": monthly_returns,
+        "daily_returns":   daily_ret,
         "trades":         [{"date": t.date, "side": t.side, "price": t.price, "cost": round(t.cost, 0)} for t in trades[:50]],
     }
 

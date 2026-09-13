@@ -26,6 +26,10 @@ from typing import Optional, Callable
 import httpx
 
 logger = logging.getLogger("notifier")
+# httpx INFO logs include the full request URL; Telegram bot tokens and Discord
+# webhook URLs are credentials, so never emit those URLs through application logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 TELEGRAM_BASE = "https://api.telegram.org"
 DISCORD_MAX_MESSAGE = 2000

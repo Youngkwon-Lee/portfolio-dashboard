@@ -1,0 +1,68 @@
+# PortfolioAI API edge hardening template.
+# Replace the server_name and certificate paths before enabling this file.
+# Keep the FastAPI process bound to 127.0.0.1:8000; do not expose Uvicorn directly.
+
+limit_req_zone $binary_remote_addr zone=portfolio_api:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=portfolio_ai:10m rate=20r/m;
+limit_conn_zone $binary_remote_addr zone=portfolio_conn:10m;
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name api.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    # Prevent oversized JSON bodies from reaching FastAPI/provider clients.
+    client_max_body_size 1m;
+    limit_req_status 429;
+    limit_conn portfolio_conn 20;
+
+    location ^~ /api/analyze/ {
+        limit_req zone=portfolio_ai burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location = /api/chat {
+        limit_req zone=portfolio_ai burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_buffering off;
+    }
+
+    location ^~ /api/ {
+        limit_req zone=portfolio_api burst=20 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_send_timeout 60s;
+    }
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        return 404;
+    }
+}

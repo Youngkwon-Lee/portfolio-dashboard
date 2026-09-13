@@ -85,12 +85,42 @@ export default function CandlestickChart() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const chart = createChart(containerRef.current, {
-      ...CHART_THEME,
-      width:  containerRef.current.clientWidth,
-      height: 280,
-      autoSize: false,
-    });
+    const chartContainer = containerRef.current;
+    const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
+    const applyStyleNonce = () => {
+      if (!nonce) return;
+      chartContainer.querySelectorAll("style:not([nonce])").forEach((style) => {
+        style.setAttribute("nonce", nonce);
+      });
+    };
+    const styleObserver = nonce
+      ? new MutationObserver(applyStyleNonce)
+      : null;
+    styleObserver?.observe(chartContainer, { childList: true, subtree: true });
+
+    const originalCreateElement = document.createElement.bind(document);
+    if (nonce) {
+      document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
+        const element = originalCreateElement(tagName, options);
+        if (tagName.toLowerCase() === "style") {
+          element.setAttribute("nonce", nonce);
+        }
+        return element;
+      }) as typeof document.createElement;
+    }
+
+    let chart: IChartApi;
+    try {
+      chart = createChart(chartContainer, {
+        ...CHART_THEME,
+        width:  chartContainer.clientWidth,
+        height: 280,
+        autoSize: false,
+      });
+    } finally {
+      document.createElement = originalCreateElement;
+    }
+    applyStyleNonce();
     chartRef.current = chart;
 
     // 캔들스틱
@@ -158,14 +188,39 @@ export default function CandlestickChart() {
       const isUp = c.close >= c.open;
       const color = isUp ? "#3fb950" : "#f85149";
 
-      tooltip.innerHTML = `
-        <div style="color:#8b949e;margin-bottom:2px">${String(param.time)}</div>
-        <div>시가 <b>${c.open.toLocaleString()}</b></div>
-        <div style="color:#f85149">고가 <b>${c.high.toLocaleString()}</b></div>
-        <div style="color:#58a6ff">저가 <b>${c.low.toLocaleString()}</b></div>
-        <div>종가 <b style="color:${color}">${c.close.toLocaleString()}</b>
-          <span style="color:${color}">(${isUp ? "+" : ""}${changePct}%)</span></div>
-      `;
+      tooltip.replaceChildren();
+
+      const dateRow = document.createElement("div");
+      dateRow.style.color = "#8b949e";
+      dateRow.style.marginBottom = "2px";
+      dateRow.textContent = String(param.time);
+      tooltip.appendChild(dateRow);
+
+      const appendMetric = (label: string, value: string, rowColor?: string) => {
+        const row = document.createElement("div");
+        if (rowColor) row.style.color = rowColor;
+        row.appendChild(document.createTextNode(`${label} `));
+        const strong = document.createElement("b");
+        strong.textContent = value;
+        row.appendChild(strong);
+        tooltip.appendChild(row);
+      };
+
+      appendMetric("시가", c.open.toLocaleString());
+      appendMetric("고가", c.high.toLocaleString(), "#f85149");
+      appendMetric("저가", c.low.toLocaleString(), "#58a6ff");
+
+      const closeRow = document.createElement("div");
+      closeRow.appendChild(document.createTextNode("종가 "));
+      const closeValue = document.createElement("b");
+      closeValue.style.color = color;
+      closeValue.textContent = c.close.toLocaleString();
+      closeRow.appendChild(closeValue);
+      const change = document.createElement("span");
+      change.style.color = color;
+      change.textContent = ` (${isUp ? "+" : ""}${changePct}%)`;
+      closeRow.appendChild(change);
+      tooltip.appendChild(closeRow);
       tooltip.style.display = "block";
     });
 
@@ -179,6 +234,7 @@ export default function CandlestickChart() {
 
     return () => {
       ro.disconnect();
+      styleObserver?.disconnect();
       tooltip.remove();
       chart.remove();
       chartRef.current = null;

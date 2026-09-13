@@ -5,8 +5,7 @@ import {
   Legend, ReferenceLine, AreaChart, Area,
 } from "recharts";
 import { FlaskConical, Play, ShieldCheck } from "lucide-react";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { API_BASE } from "@/lib/apiBase";
 
 // ── 타입 ──────────────────────────────────────
 
@@ -71,6 +70,26 @@ interface BtResponse {
     reason: string | null;
     folds: { fold: number; train_end: string; test_start: string; test_end: string; test_samples: number; results: BtResult[] }[];
     summaries: { strategy: string; average_return_pct: number; return_volatility_pct: number; positive_fold_ratio: number; return_range_pct: number; consistent: boolean; promotion_eligible: boolean }[];
+  };
+  robustness: {
+    paper_only: boolean;
+    method: string;
+    pbo: {
+      available: boolean;
+      pbo?: number | null;
+      combinations?: number;
+      reason?: string;
+      purge_applied?: boolean;
+      embargo_bars?: number;
+    };
+    deflated_sharpe: Record<string, {
+      available: boolean;
+      probability?: number;
+      observed_sharpe?: number;
+      selection_benchmark_sharpe?: number;
+      reason?: string;
+    }>;
+    warning: string;
   };
   promotion_gate: {
     paper_only: boolean;
@@ -228,6 +247,7 @@ export default function BacktestPage() {
     try {
       const res = await fetch(`${API_BASE}/api/backtest`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ticker: ticker.trim().toUpperCase(), period, initial: Number(initial), strategy,
@@ -535,6 +555,27 @@ export default function BacktestPage() {
               </div>
             </div>
           )}
+
+          {response?.robustness && (() => {
+            const selectedDsr = response.robustness.deflated_sharpe[selected.strategy];
+            const pbo = response.robustness.pbo;
+            return (
+              <div className="p-3 rounded-lg text-xs" role="status" style={{ background: "#0d1117", border: "1px solid var(--card-border)" }}>
+                <div className="font-semibold mb-1">선택 편향 진단 (paper-only)</div>
+                <div style={{ color: pbo.available && (pbo.pbo ?? 1) < 0.5 ? "var(--accent-green)" : "var(--accent-yellow)" }}>
+                  {pbo.available ? `PBO ${((pbo.pbo ?? 0) * 100).toFixed(1)}% · 연속 블록 ${pbo.combinations ?? 0}개 조합` : (pbo.reason ?? "PBO를 계산할 표본이 부족합니다")}
+                </div>
+                {selectedDsr?.available ? (
+                  <div className="mt-1" style={{ color: "var(--muted)" }}>
+                    {selected.strategy} · DSR 통과확률 {(selectedDsr.probability! * 100).toFixed(1)}% · 관측 Sharpe {selectedDsr.observed_sharpe!.toFixed(2)} · 선택 기준 {selectedDsr.selection_benchmark_sharpe!.toFixed(2)}
+                  </div>
+                ) : (
+                  <div className="mt-1" style={{ color: "var(--muted)" }}>{selectedDsr?.reason ?? "선택 전략의 DSR 표본이 부족합니다"}</div>
+                )}
+                <div className="mt-1" style={{ color: "var(--muted)" }}>{response.robustness.warning}</div>
+              </div>
+            );
+          })()}
 
           {/* 위험조정 지표 */}
           <div className="p-3 rounded-lg flex flex-col gap-2" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>

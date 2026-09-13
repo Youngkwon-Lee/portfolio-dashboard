@@ -4,12 +4,18 @@
 """
 import os
 import math
+import asyncio
+from collections import deque
 from datetime import datetime, timedelta, timezone
+from secrets import compare_digest
+from time import monotonic
 from typing import Literal
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from dotenv import load_dotenv
 
@@ -17,6 +23,7 @@ import kis_client as kis
 import us_client as us
 import wallet_client as wallet
 import backtest_engine as bt
+import backtest_diagnostics as bd
 import trading_bot as bot
 import database as db
 import optimizer as opt
@@ -27,12 +34,170 @@ from contextlib import asynccontextmanager
 
 load_dotenv()
 
+
+def _csv_env(name: str, default: str) -> list[str]:
+    return [value.strip() for value in os.getenv(name, default).split(",") if value.strip()]
+
+
+APP_ENV = os.getenv("APP_ENV", "development").lower()
+IS_PRODUCTION = APP_ENV == "production"
+ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN", "http://localhost:3000")
+ALLOWED_HOSTS = _csv_env("ALLOWED_HOSTS", "localhost,127.0.0.1,testserver")
+operator_bearer = HTTPBearer(auto_error=False)
+AI_RATE_LIMIT = 20
+AI_RATE_WINDOW_SECONDS = 60.0
+_ai_request_times: dict[str, deque[float]] = {}
+API_RATE_LIMIT = 120
+API_RATE_WINDOW_SECONDS = 60.0
+API_MAX_REQUEST_BODY_BYTES = 1_048_576
+API_MAX_CONCURRENT_REQUESTS = 100
+_api_request_times: dict[str, deque[float]] = {}
+_api_concurrency = asyncio.Semaphore(API_MAX_CONCURRENT_REQUESTS)
+
+
+def require_operator(
+    credentials: HTTPAuthorizationCredentials | None = Depends(operator_bearer),
+) -> None:
+    """Require a server-side operator token for privileged production actions."""
+    expected = os.getenv("PAPER_OPERATOR_TOKEN", "").strip()
+    if not IS_PRODUCTION and not expected:
+        return
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="운영자 인증이 구성되지 않아 보호된 기능을 사용할 수 없습니다.",
+        )
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=401,
+            detail="운영자 인증이 필요합니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        token_matches = compare_digest(credentials.credentials, expected)
+    except TypeError:
+        # A malformed/non-ASCII Authorization value must fail closed, not 500.
+        token_matches = False
+    if not token_matches:
+        raise HTTPException(
+            status_code=401,
+            detail="운영자 인증이 필요합니다.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def _request_client_key(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_ai_rate_limit(request: Request) -> None:
+    now = monotonic()
+    key = _request_client_key(request)
+    timestamps = _ai_request_times.setdefault(key, deque())
+    while timestamps and now - timestamps[0] >= AI_RATE_WINDOW_SECONDS:
+        timestamps.popleft()
+    if len(timestamps) >= AI_RATE_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail="AI 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
+            headers={"Retry-After": str(int(AI_RATE_WINDOW_SECONDS))},
+        )
+    timestamps.append(now)
+
+
+def _enforce_api_rate_limit(request: Request) -> bool:
+    now = monotonic()
+    key = _request_client_key(request)
+    timestamps = _api_request_times.setdefault(key, deque())
+    while timestamps and now - timestamps[0] >= API_RATE_WINDOW_SECONDS:
+        timestamps.popleft()
+    if len(timestamps) >= API_RATE_LIMIT:
+        return False
+    timestamps.append(now)
+    return True
+
+
+def require_ai_access(
+    request: Request,
+    _: None = Depends(require_operator),
+) -> None:
+    _enforce_ai_rate_limit(request)
+
+
+def external_market_reads_enabled() -> bool:
+    """자동 시장 데이터 읽기는 명시적으로 허용할 때만 연다."""
+    return os.getenv("PAPER_EXTERNAL_MARKET_READS", "false").lower() == "true"
+
+
+MARKET_DATA_ERROR = "시장 데이터 조회 실패"
+WALLET_DATA_ERROR = "지갑 데이터 조회 실패"
+
 @asynccontextmanager
 async def lifespan(application):
     await db.init_db()
     yield
 
-app = FastAPI(title="Portfolio Dashboard API", version="2.1.0-paper", lifespan=lifespan)
+app = FastAPI(
+    title="Portfolio Dashboard API",
+    version="2.1.0-paper",
+    lifespan=lifespan,
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
+)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    is_api_request = request.url.path.startswith("/api/")
+    if is_api_request:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "잘못된 요청 크기입니다."})
+            if declared_length > API_MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "요청 본문이 너무 큽니다."},
+                )
+
+        if request.method in {"POST", "PUT", "PATCH"}:
+            body = await request.body()
+            if len(body) > API_MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "요청 본문이 너무 큽니다."},
+                )
+
+        if not _enforce_api_rate_limit(request):
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "API 요청 한도를 초과했습니다. 잠시 후 다시 시도하세요."},
+                headers={"Retry-After": str(int(API_RATE_WINDOW_SECONDS))},
+            )
+
+        if _api_concurrency.locked():
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "API 동시 요청 한도에 도달했습니다. 잠시 후 다시 시도하세요."},
+                headers={"Retry-After": "1"},
+            )
+        await _api_concurrency.acquire()
+
+    try:
+        response = await call_next(request)
+    finally:
+        if is_api_request:
+            _api_concurrency.release()
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+    )
+    return response
 
 
 @app.exception_handler(RequestValidationError)
@@ -44,12 +209,14 @@ async def sanitized_validation_error(_: Request, exc: RequestValidationError):
     ]
     return JSONResponse(status_code=422, content={"detail": errors})
 
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("ALLOWED_ORIGIN", "http://localhost:3000")],
+    allow_origins=[ALLOWED_ORIGIN],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # ── 티커 마켓 판별 헬퍼 ──────────────────────────
@@ -82,6 +249,7 @@ async def health():
         "version": "2.1.0-paper",
         "execution_mode": "paper",
         "live_allowed": False,
+        "external_market_reads_allowed": external_market_reads_enabled(),
         "kis_environment": "vts",
     }
 
@@ -107,8 +275,8 @@ async def get_price(ticker: str, currency: str = "krw"):
             return await us.get_crypto_price(ticker, currency)
         else:
             return await us.get_us_price(ticker)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=MARKET_DATA_ERROR)
 
 
 @app.get("/api/price/{ticker}/chart")
@@ -139,17 +307,24 @@ async def get_chart(
             "source": market_data_source(market),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=MARKET_DATA_ERROR)
 
 
 @app.get("/api/prices")
 async def get_multiple_prices(
-    tickers: str = Query(..., description="쉼표 구분 티커 ex) 005930,AAPL,BTC"),
+    tickers: str = Query(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="쉼표 구분 티커 ex) 005930,AAPL,BTC",
+    ),
     currency: str = "krw",
 ):
     """여러 종목 현재가 일괄 (마켓 혼합 가능)."""
     ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+    if len(ticker_list) > 20:
+        raise HTTPException(status_code=400, detail="한 번에 최대 20개 종목까지 지원합니다.")
     results = []
     for t in ticker_list:
         market = detect_market(t)
@@ -160,8 +335,8 @@ async def get_multiple_prices(
                 results.append(await us.get_crypto_price(t, currency))
             else:
                 results.append(await us.get_us_price(t))
-        except Exception as e:
-            results.append({"ticker": t, "market": market, "error": str(e)})
+        except Exception:
+            results.append({"ticker": t, "market": market, "error": MARKET_DATA_ERROR})
     return results
 
 
@@ -200,6 +375,9 @@ async def place_order(req: OrderRequest):
 @app.get("/api/indices")
 async def get_all_indices():
     """KOSPI/KOSDAQ + 미국 주요 지수 + BTC."""
+    if not external_market_reads_enabled():
+        return []
+
     results = []
 
     # 국내 지수 (KIS)
@@ -216,8 +394,8 @@ async def get_all_indices():
                 "value": float(o.get("bstp_nmix_prpr", 0)),
                 "change_pct": float(o.get("bstp_nmix_prdy_ctrt", 0)),
             })
-        except Exception as e:
-            results.append({"name": name, "error": str(e)})
+        except Exception:
+            results.append({"name": name, "error": MARKET_DATA_ERROR})
 
     # 미국 지수 (Yahoo)
     global_indices = await us.get_global_indices()
@@ -227,8 +405,8 @@ async def get_all_indices():
     try:
         btc = await us.get_crypto_price("BTC", "krw")
         results.append({"name": "BTC/KRW", "value": btc["current_price"], "change_pct": btc["change_pct"]})
-    except Exception as e:
-        results.append({"name": "BTC/KRW", "error": str(e)})
+    except Exception:
+        results.append({"name": "BTC/KRW", "error": MARKET_DATA_ERROR})
 
     return results
 
@@ -241,8 +419,8 @@ async def get_all_indices():
 async def get_crypto(ticker: str, currency: str = "krw"):
     try:
         return await us.get_crypto_price(ticker, currency)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=MARKET_DATA_ERROR)
 
 
 @app.get("/api/crypto/{ticker}/chart")
@@ -254,8 +432,8 @@ async def get_crypto_chart(
     try:
         candles = await us.get_crypto_chart(ticker, period, currency)
         return {"ticker": ticker, "period": period, "candles": candles}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=MARKET_DATA_ERROR)
 
 
 # ──────────────────────────────────────────────
@@ -296,7 +474,7 @@ async def bot_daily_pnl():
 
 class OptimizeRequest(BaseModel):
     tickers: list[str]
-    period:  str = "1Y"
+    period:  Literal["6M", "1Y"] = "1Y"
 
 
 # ──────────────────────────────────────────────
@@ -309,8 +487,17 @@ async def get_news_sentiment(ticker: str):
 
 
 @app.get("/api/news")
-async def get_portfolio_sentiment(tickers: str = Query(..., description="쉼표 구분 ex) BTC,ETH")):
+async def get_portfolio_sentiment(
+    tickers: str = Query(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="쉼표 구분 ex) BTC,ETH",
+    ),
+):
     ticker_list = [t.strip() for t in tickers.split(",") if t.strip()]
+    if len(ticker_list) > 20:
+        raise HTTPException(status_code=400, detail="한 번에 최대 20개 종목까지 지원합니다.")
     return await news.analyze_portfolio(ticker_list)
 
 
@@ -324,8 +511,17 @@ async def upbit_markets():
 
 
 @app.get("/api/upbit/ticker")
-async def upbit_ticker(markets: str = Query(..., description="ex) KRW-BTC,KRW-ETH")):
+async def upbit_ticker(
+    markets: str = Query(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="ex) KRW-BTC,KRW-ETH",
+    ),
+):
     market_list = [m.strip() for m in markets.split(",") if m.strip()]
+    if len(market_list) > 20:
+        raise HTTPException(status_code=400, detail="한 번에 최대 20개 마켓까지 지원합니다.")
     return await upbit.get_ticker(market_list)
 
 
@@ -398,13 +594,31 @@ async def compare_backtest_to_paper(
 
 @app.post("/api/optimize")
 async def optimize_portfolio(req: OptimizeRequest):
-    if len(req.tickers) < 2:
+    tickers = [ticker.strip().upper() for ticker in req.tickers]
+    if any(
+        not ticker
+        or len(ticker) > 20
+        or not all(character.isalnum() or character in "._-" for character in ticker)
+        for ticker in tickers
+    ):
+        raise HTTPException(status_code=400, detail="티커 형식이 올바르지 않습니다")
+    if len(set(tickers)) != len(tickers):
+        raise HTTPException(status_code=400, detail="중복 티커는 허용되지 않습니다")
+    if len(tickers) < 2:
         raise HTTPException(status_code=400, detail="최소 2개 종목 필요")
-    if len(req.tickers) > 8:
+    if len(tickers) > 8:
         raise HTTPException(status_code=400, detail="최대 8개 종목까지 지원")
+    if not external_market_reads_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "external_market_reads_disabled",
+                "message": "시장 데이터 읽기가 잠겨 있습니다. paper 환경 변수로 명시적으로 허용한 뒤 다시 시도하세요.",
+            },
+        )
 
     price_history: dict[str, list[float]] = {}
-    for ticker in req.tickers:
+    for ticker in tickers:
         try:
             res = await get_chart(ticker, req.period)
             candles = res.get("candles", []) if isinstance(res, dict) else []
@@ -413,18 +627,21 @@ async def optimize_portfolio(req: OptimizeRequest):
             price_history[ticker] = [c["close"] for c in candles]
         except HTTPException:
             raise
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"{ticker} 조회 실패: {e}")
+        except Exception:
+            raise HTTPException(status_code=502, detail=f"{ticker} 조회 실패")
 
     try:
-        result = opt.optimize(req.tickers, price_history)
+        result = opt.optimize(tickers, price_history)
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/bot/start")
-async def bot_start(cfg: BotConfig):
+async def bot_start(
+    cfg: BotConfig,
+    _: None = Depends(require_operator),
+):
     if cfg.mode != "paper":
         raise HTTPException(status_code=403, detail=LIVE_BLOCK_REASON)
     if not cfg.symbols:
@@ -448,7 +665,7 @@ async def bot_start(cfg: BotConfig):
 
 
 @app.post("/api/bot/stop")
-async def bot_stop():
+async def bot_stop(_: None = Depends(require_operator)):
     await bot.stop()
     return {"ok": True}
 
@@ -470,13 +687,16 @@ async def trading_safety():
 
 
 @app.post("/api/bot/kill-switch")
-async def bot_kill_switch():
+async def bot_kill_switch(_: None = Depends(require_operator)):
     await bot.activate_kill_switch()
     return {"ok": True, "safety": bot.get_safety_contract()}
 
 
 @app.post("/api/bot/reconcile")
-async def bot_reconcile(payload: SafetyConfirmation):
+async def bot_reconcile(
+    payload: SafetyConfirmation,
+    _: None = Depends(require_operator),
+):
     try:
         bot.acknowledge_reconciliation(payload.confirmation)
     except SafetyViolation as exc:
@@ -488,7 +708,10 @@ async def bot_reconcile(payload: SafetyConfirmation):
 
 
 @app.post("/api/bot/safety-reset")
-async def bot_safety_reset(payload: SafetyConfirmation):
+async def bot_safety_reset(
+    payload: SafetyConfirmation,
+    _: None = Depends(require_operator),
+):
     try:
         bot.reset_kill_switch(payload.confirmation)
     except SafetyViolation as exc:
@@ -742,6 +965,7 @@ async def run_backtest(req: BacktestRequest):
             "results": validation,
         },
         "walk_forward": walk_forward,
+        "robustness": bd.build_robustness_diagnostics(results),
         "promotion_gate": {
             "paper_only": True,
             "minimum_positive_folds": 2,
@@ -767,8 +991,8 @@ async def get_phantom(address: str):
     """Phantom (Solana) 지갑 잔고."""
     try:
         return await wallet.get_phantom_balance(address)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=WALLET_DATA_ERROR)
 
 
 @app.get("/api/wallet/metamask/{address}")
@@ -776,8 +1000,8 @@ async def get_metamask(address: str):
     """MetaMask (Ethereum) 지갑 잔고."""
     try:
         return await wallet.get_metamask_balance(address)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail=WALLET_DATA_ERROR)
 
 
 @app.post("/api/wallet/binance")
@@ -826,7 +1050,11 @@ def _check_api_key():
 
 
 @app.post("/api/analyze/portfolio")
-async def analyze_portfolio(payload: PortfolioPayload):
+async def analyze_portfolio(
+    payload: PortfolioPayload,
+    request: Request,
+    _: None = Depends(require_ai_access),
+):
     """포트폴리오 종합 분석 (스트리밍 SSE)."""
     _check_api_key()
 
@@ -839,7 +1067,11 @@ async def analyze_portfolio(payload: PortfolioPayload):
 
 
 @app.post("/api/analyze/stock")
-async def analyze_stock(payload: StockAnalysisPayload):
+async def analyze_stock(
+    payload: StockAnalysisPayload,
+    request: Request,
+    _: None = Depends(require_ai_access),
+):
     """개별 종목 분석 (스트리밍 SSE)."""
     _check_api_key()
 
@@ -852,7 +1084,11 @@ async def analyze_stock(payload: StockAnalysisPayload):
 
 
 @app.post("/api/analyze/strategies")
-async def get_strategies(payload: StrategyPayload):
+async def get_strategies(
+    payload: StrategyPayload,
+    request: Request,
+    _: None = Depends(require_ai_access),
+):
     """전략 추천 (JSON 응답)."""
     _check_api_key()
     result = await ai.get_strategy_recommendations(
@@ -863,7 +1099,11 @@ async def get_strategies(payload: StrategyPayload):
 
 
 @app.post("/api/chat")
-async def chat(payload: ChatPayload):
+async def chat(
+    payload: ChatPayload,
+    request: Request,
+    _: None = Depends(require_ai_access),
+):
     """자유 질의 채팅 (스트리밍 SSE)."""
     _check_api_key()
 

@@ -69,9 +69,27 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 - `POST /api/bot/reconcile`: 비정상 재시작 상태 대사(정확한 확인 문구 필요)
 - `POST /api/bot/safety-reset`: 정지 상태의 kill switch 해제(정확한 확인 문구 필요)
 
+운영 환경(`APP_ENV=production`)에서는 bot 제어와 AI 분석 endpoint가 기본적으로 운영자 인증으로 보호됩니다. 서버에 `PAPER_OPERATOR_TOKEN`을 런타임 secret으로 주입하고 `Authorization: Bearer <token>` 헤더를 사용하세요. 이 토큰을 `NEXT_PUBLIC_*`, 프런트엔드 코드, 로그에 넣지 마세요. 운영자 토큰이 없으면 보호된 기능은 fail-closed로 `503`을 반환하며, AI endpoint는 client별 분당 20회 상한도 적용합니다. 백엔드는 Nginx가 없는 환경에서도 `/api/*`에 프로세스별 client rate limit(분당 120회), 본문 1MiB, 동시 요청 100개 fallback을 적용합니다. 로컬 development에서는 토큰이 없을 때 기존 paper UI 흐름을 유지합니다.
+
 알림은 Telegram과 Discord webhook을 선택적으로 지원합니다. Discord는 `DISCORD_WEBHOOK_URL`을 런타임 시크릿으로만 주입하면 `#paper-trading-alerts`에 paper 시작·정지·매수·매도·kill switch·일일 리포트를 best-effort 전송합니다. 환경 변수가 없으면 네트워크를 호출하지 않으며, 알림 실패가 paper 주문을 성공으로 바꾸거나 실거래를 활성화하지 않습니다. webhook URL과 Telegram 자격 증명은 저장소·`.env`·로그에 기록하지 않습니다.
 
+### 운영 배포 hardening
+
+`deploy/nginx/portfolio-api.conf.example`은 FastAPI 앞단에 둘 Nginx 템플릿입니다. `server_name`과 TLS 인증서 경로를 운영 값으로 바꾼 뒤 적용하고, Uvicorn은 `127.0.0.1:8000`에만 바인딩하세요. 템플릿은 일반 API를 IP별 초당 10회(+burst 20), AI endpoint(`/api/analyze/*`, `/api/chat`)를 분당 20회(+burst 5), 동시 연결 20개, request body를 1MiB로 제한하고 초과 요청에 429를 반환합니다. 애플리케이션 내부 제한과 별개로 다중 worker/인스턴스 환경의 공유 edge 제한으로 사용해야 합니다.
+
+프런트엔드는 요청별 nonce 기반 CSP를 실제 강제합니다. `script-src`와 `style-src`는 nonce를 사용하고, 기존 React style 속성만 `style-src-attr 'unsafe-inline'`으로 제한합니다. 차트 라이브러리가 동적으로 만드는 `<style>`에는 요청 nonce를 부여합니다. `proxy.ts`는 `NEXT_PUBLIC_API_URL`의 origin만 `connect-src`에 허용하며, production에서 값이 없거나 잘못되면 외부 origin을 허용하지 않습니다. `lib/apiBase.ts`도 같은 정책을 사용해 production 설정이 빠진 경우 사용자의 `localhost:8000`으로 요청하지 않고 fail-closed 합니다.
+
+알림 credential은 코드에서 회전할 수 없습니다. 이번 로컬 검증에서 요청 URL 로그 노출 가능성을 확인해 HTTP client 요청 로그를 낮췄으므로, BotFather에서 Telegram bot token을 폐기·재발급하고 Discord 채널의 webhook URL을 Regenerate한 뒤 새 값을 secret manager에 주입하고 프로세스를 재시작해야 합니다. 기존 값은 재사용하지 마세요.
+
+프런트엔드의 자동 시장 데이터 읽기는 기본적으로 꺼져 있습니다. `NEXT_PUBLIC_ENABLE_EXTERNAL_MARKET_READS=true`를 명시적으로 주입한 환경에서만 대시보드 마운트 시 외부 시세를 조회하며, 기본 paper 화면은 로컬 mock 데이터로 렌더링됩니다. 이 설정은 주문·계좌 API를 열지 않습니다.
+
+백엔드의 `/api/indices`도 기본 fail-closed입니다. 외부 지수 조회를 정말 허용할 때만 `PAPER_EXTERNAL_MARKET_READS=true`를 서버에 별도로 주입해야 하며, 프런트엔드와 백엔드 두 게이트가 모두 열리지 않으면 KIS·Binance·Yahoo/CoinGecko 조회가 실행되지 않습니다.
+
+`POST /api/optimize`도 같은 백엔드 시장 데이터 게이트를 따릅니다. 기본값에서는 외부 가격을 읽지 않고 403을 반환하며, 명시적으로 `PAPER_EXTERNAL_MARKET_READS=true`를 주입한 paper 환경에서만 Markowitz·최소 변동성·리스크 패리티·동일 가중 결과를 계산합니다. 응답에는 `methodology.reproducible`, 고정 seed, `execution_mode: "paper"`, `live_allowed: false`가 포함되고 결과는 주문·계좌에 연결되지 않습니다.
+
 `/api/order`, `/api/balance`, `/api/upbit/balance`, `/api/wallet/binance`는 현재 항상 차단됩니다. 실거래 활성화는 환경 변수 하나로 열 수 있는 기능이 아니며 별도의 법무·보안 설계와 승인 없이는 지원하지 않습니다.
+
+시장·지갑 provider 장애는 502와 일반화된 오류만 반환하며 내부 예외나 인증 정보는 응답에 반영하지 않습니다.
 
 ## 백테스트 사용 범위
 
@@ -80,6 +98,10 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 결과에는 수익률·MDD·승률·거래 수와 함께 데이터 출처(`source`) 및 조회 시각(`fetched_at`)이 표시됩니다. 기본 거래비용은 수수료 10bps와 슬리피지 5bps이며 UI/API에서 조정할 수 있습니다. 모든 결과에는 동일 비용 조건의 Buy & Hold 기준선이 포함되고, 최소 20개 캔들부터 시간순 홀드아웃(`chronological_holdout`) 70/30 검증(학습·검증 수익률, 검증 MDD·Sharpe·표본 수)이 함께 반환됩니다. 검증 표본이 30개 미만이면 API와 UI가 Sharpe 해석 주의 경고를 표시합니다. 180개 이상 캔들에서는 폴드당 최소 30개 검증 표본을 갖는 3개 확장 윈도우 워크포워드 결과(`walk_forward`)도 반환하며, 폴드별 평균 수익률·수익률 변동성·양수 폴드 비율·수익률 범위·일관성 판정을 함께 제공합니다. 짧은 표본에서는 실행하지 않고 이유를 명시합니다. 날짜가 ISO 형식이 아니거나 오름차순·고유성을 만족하지 않거나 timezone 형식이 서로 섞이거나 OHLC 값이 유한한 양수 범위를 벗어나거나 거래량이 음수이면 백테스트를 거부합니다. 이는 미래 성과 보장이 아닙니다. 결과는 지연·미래 데이터 편향을 완전히 재현하지 않으므로 실적 또는 수익률 보장으로 해석하면 안 됩니다. 차트 조회는 짧은 TTL 캐시를 사용하며, 캐시 실패 결과는 저장하지 않습니다.
 
 워크포워드 결과에는 `promotion_gate`도 포함됩니다. 이는 실거래 승인이나 수익 보장이 아니라 paper 관찰 후보를 좁히는 보수적 필터입니다. 양수 폴드 2개 이상, 폴드당 검증 표본 30개 이상, 평균 폴드 수익률 양수를 모두 만족해야 `eligible_strategies`에 포함되며, 후보가 없으면 UI/API가 `HOLD 권고`를 표시합니다. 현재 gate는 백테스트 분석 계약이며 실거래 경로를 열지 않습니다.
+
+추가로 API의 `robustness` 필드는 여러 전략을 동시에 비교할 때의 선택 편향을 진단합니다. 연속 시간 블록 CSCV 기반 PBO 근사치와 시도 횟수를 보정한 Deflated Sharpe 확률을 제공하며, 표본 부족 시 `available: false`를 반환합니다. 현재 고정 규칙 전략은 미래 라벨을 학습하지 않으므로 label purge/embargo를 적용하지 않았고, 진단은 paper 분석 전용입니다. 이는 수익률 보장이나 실거래 승격 신호가 아닙니다.
+
+진단의 연구 근거는 [Probability of Backtest Overfitting](https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf)과 [Deflated Sharpe Ratio](https://www.davidhbailey.com/dhbpapers/deflated-sharpe.pdf)입니다. Qlib·FinRL·VectorBT 같은 외부 연구 프레임워크를 런타임 주문 경로에 직접 끌어오지 않고, 현재 엔진의 paper 분석 결과를 보수적으로 교차검증하는 용도로만 참고합니다.
 
 ## 검증
 

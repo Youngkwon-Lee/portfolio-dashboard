@@ -67,6 +67,14 @@ python -m unittest backend.tests.test_paper_soak -v
 
 백테스트의 `promotion_gate`는 워크포워드 양수 폴드 2개 이상, 폴드당 검증 표본 30개 이상, 평균 수익률 양수인 전략만 paper 관찰 후보로 표시합니다. 후보가 없으면 `HOLD`를 권고하며, 이 계약은 실거래를 활성화하지 않습니다.
 
+응답의 `robustness`에는 전략 선택 편향 진단도 포함됩니다. 여러 고정 규칙 전략이 함께 실행될 때 연속 시간 블록을 조합하는 CSCV 방식으로 PBO(Probability of Backtest Overfitting)를 근사하고, 각 전략에는 시도 횟수 보정 Deflated Sharpe 확률을 계산합니다. 현재 전략은 미래 라벨을 학습하지 않는 고정 규칙이므로 label purge/embargo를 적용하지 않았으며, `purge_applied: false`가 명시됩니다. 표본이 짧으면 억지로 숫자를 만들지 않고 `available: false`를 반환합니다. 이 진단은 paper 분석 전용이며 승격이나 실거래를 자동 승인하지 않습니다.
+
+`/api/indices`는 `PAPER_EXTERNAL_MARKET_READS=true`를 명시하지 않으면 빈 결과를 반환하며 KIS·Binance·Yahoo/CoinGecko를 호출하지 않습니다. 프런트엔드의 `NEXT_PUBLIC_ENABLE_EXTERNAL_MARKET_READS` 게이트와 별개로 동작하는 이중 안전장치입니다.
+
+시장·지갑 provider 예외는 502와 일반화된 메시지로 닫히며 내부 예외 문자열이나 인증 정보는 API 응답에 노출하지 않습니다.
+
+`POST /api/optimize`도 기본적으로 외부 시장 데이터 읽기를 차단하고 403을 반환합니다. 명시적 paper 게이트가 열린 경우에만 최적화하며, 결과는 고정 seed로 재현 가능하고 `execution_mode: "paper"`, `live_allowed: false`, `methodology.paper_only: true`를 반환합니다.
+
 24시간 wall-clock soak는 OS 정리 대상인 `/tmp`가 아닌 Application Support 경로에 증거를 남깁니다.
 
 ```bash

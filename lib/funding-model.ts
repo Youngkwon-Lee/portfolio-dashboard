@@ -46,7 +46,7 @@ function rateNumber(value: unknown): number {
   // manufacture a zero funding settlement when the source omitted a rate.
   if (typeof value !== "number" && typeof value !== "string") throw Error("Invalid funding rate");
   if (typeof value === "string" &&
-      !/^[+-]?(?:\d+(?:\\.\d*)?|\\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) {
+      !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) {
     throw Error("Invalid funding rate");
   }
   const n = Number(value);

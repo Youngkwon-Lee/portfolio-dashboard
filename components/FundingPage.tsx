@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowDownUp, BarChart3, FlaskConical, RefreshCcw, ShieldCheck, TrendingDown, Wallet } from "lucide-react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-model";
@@ -23,13 +23,15 @@ export default function FundingPage(){
   const [result,setResult]=useState<FundingResult|null>(null);
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
-  const clear=()=>{setResult(null);setError("");};
+  const requestIdRef=useRef(0);
+  const clear=()=>{requestIdRef.current++;setResult(null);setError("");setLoading(false);};
   const inputsValid=[notional,spotFee,perpFee,slippage].every(x=>x.trim()!=="" && Number.isFinite(Number(x)))
     && Number(notional)>=100 && Number(notional)<=1000000
     && [spotFee,perpFee,slippage].every(x=>Number(x)>=0 && Number(x)<=100);
 
   const analyze=async()=>{
     if(!inputsValid || loading)return;
+    const requestId=++requestIdRef.current;
     setResult(null);setError("");setLoading(true);
     try{
       const query=new URLSearchParams({coin,days:String(days),notional,spotFeeBps:spotFee,perpFeeBps:perpFee,slippageBps:slippage});
@@ -38,9 +40,9 @@ export default function FundingPage(){
       if(!response.ok) throw Error(typeof data?.error==="string"?data.error:"공개 데이터 조회 실패");
       if(data?.execution_mode!=="paper" || data?.live_allowed!==false || !Array.isArray(data?.curve))
         throw Error("읽기 전용 응답 형식 오류");
-      setResult(data as FundingResult);
-    }catch(e){setError(e instanceof Error?e.message:"공개 데이터 조회 실패");}
-    finally{setLoading(false);}
+      if(requestId===requestIdRef.current) setResult(data as FundingResult);
+    }catch(e){if(requestId===requestIdRef.current) setError(e instanceof Error?e.message:"공개 데이터 조회 실패");}
+    finally{if(requestId===requestIdRef.current)setLoading(false);}
   };
 
   return <main className="h-full overflow-y-auto p-4 sm:p-6" style={{background:"var(--background)"}}>
@@ -111,7 +113,7 @@ export default function FundingPage(){
         </div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <Kpi title="누적 펀딩비 (비용 전)" value={usd(result.gross_funding_usd)} detail={"단순 연환산 "+percent(result.funding_simple_annualized_pct)} icon={<Wallet size={17}/>} color={BLUE}/>
-          <Kpi title="XRP/BTC/ETH 1배 숏 단독" value={usd(result.short_net_usd)} detail={percent(result.short_return_pct)+" · 숏 담보 기준"} icon={<TrendingDown size={17}/>} color={result.short_net_usd>=0?"#3fb986":"#fa7676"}/>
+          <Kpi title={result.coin+" 1배 숏 단독"} value={usd(result.short_net_usd)} detail={percent(result.short_return_pct)+" · 숏 담보 기준"} icon={<TrendingDown size={17}/>} color={result.short_net_usd>=0?"#3fb986":"#fa7676"}/>
           <Kpi title="가상 현물 + 1배 숏" value={usd(result.hedged_net_usd)} detail={percent(result.hedged_return_on_total_capital_pct)+" · 총 투입자본 기준"} icon={<ArrowDownUp size={17}/>} color={result.hedged_net_usd>=0?"#3fb986":"#fa7676"}/>
         </div>
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr]">

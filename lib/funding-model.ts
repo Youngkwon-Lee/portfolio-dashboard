@@ -42,8 +42,16 @@ function bps(value: number): number {
   return value / 10000;
 }
 function rateNumber(value: unknown): number {
+  // Number(null), Number("") and Number(false) are zero: do not silently
+  // manufacture a zero funding settlement when the source omitted a rate.
+  if (typeof value !== "number" && typeof value !== "string") throw Error("Invalid funding rate");
+  if (typeof value === "string" &&
+      !/^[+-]?(?:\d+(?:\\.\d*)?|\\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) {
+    throw Error("Invalid funding rate");
+  }
   const n = Number(value);
-  if (!Number.isFinite(n) || Math.abs(n) > 0.5) throw Error("Invalid funding rate");
+  // Hyperliquid's documented hourly funding cap is 4%.
+  if (!Number.isFinite(n) || Math.abs(n) > 0.04) throw Error("Invalid funding rate");
   return n;
 }
 export function calculateFundingSimulation(x: FundingInputs): FundingResult {
@@ -88,13 +96,15 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
     const c = candles.get(candleStart), rate = funding.get(candleStart + HOUR_MS);
     if (!c || rate === undefined) throw Error("Noncontiguous hourly data");
     const value = quantity*c.c;
+    // Stress the intrahour high *before* crediting this hour's funding.
+    // Assuming the funding arrived first can overstate a short's margin buffer.
+    const collateralHigh = x.notionalUsd + quantity*(entry-c.h) + funded - openPerpCost;
     rateSum += rate;
     // Funding is settled at mark price; candle close is a marked approximation.
     funded += value*rate;
     const pricePnl = quantity*(entry-c.c);
     const closePerp = value*(feePerp+slip), closeSpot=value*(feeSpot+slip);
     const collateralClose = x.notionalUsd + pricePnl + funded - openPerpCost;
-    const collateralHigh = x.notionalUsd + quantity*(entry-c.h) + funded - openPerpCost;
     minShort = Math.min(minShort,collateralHigh,collateralClose);
     if ((i+1)%24===0 || i===hours-1) curve.push({
       time:new Date(candleStart+HOUR_MS).toISOString(),

@@ -127,3 +127,46 @@ python backend/paper_soak_runner.py \
 러너는 저장소 밖의 새 SQLite만 사용하고 Python 소켓 연결을 모두 차단합니다. 실제 `execute_order` 경로로 매 분 paper 왕복 체결과 중복 재전송을 확인하고, 시세 장애·비정상 재연결·kill switch를 주기적으로 주입합니다. 진행 및 최종 판정은 `$wall_clock_root/run/evidence.json`에 원자적으로 기록되며 `status: "passed"`는 24시간 경과, 원장 ID 유일성, paper-only 원장, 열린 포지션 없음, 네트워크 시도 0, 소스 및 `backend/portfolio.db` 지문 불변을 모두 만족할 때만 기록됩니다.
 
 전체 안전 테스트는 paper 기본값, live fail-closed, 자격 증명 비노출 거부, 영구 원장 중복 차단, 원장 장애 시 fail-closed, 비정상 재연결, 일일 손실 한도, 최대 낙폭, kill switch, 손상된 상태 파일, 인증 엔드포인트의 downstream 미호출을 확인합니다.
+
+
+## Funding Lab — 30/90-day hourly market-data research (PAPER ONLY)
+
+Navigation: **펀딩비** (XRP / BTC / ETH). This new tab uses the unauthenticated
+Hyperliquid public `fundingHistory` and `candleSnapshot` APIs via Next.js
+`GET /api/funding`. No trading keys, wallet auth, live orders, or transfers
+are created. Existing KIS/Upbit/Binance account/order endpoints remain blocked.
+
+The analysis uses exactly **720** hourly settlements for 30 days, or **2160**
+for 90 days. Missing/duplicated data or upstream failures produce HTTP 503,
+not fabricated percentage returns. It compares (a) isolated 1x short with
+USD-sized collateral to (b) synthetic same-asset spot long + 1x short with
+**double initial committed capital**. Longs pay shorts on *positive* funding;
+negative funding is a **cost** for the short. Entry/exit commission and
+slippage are modeled separately. The account-margins path uses intrahour
+perp highs as an indicative stress proxy, not actual liquidation logic.
+
+**Scope limits:** Hyperliquid perp candle close is a proxy for settlement
+mark price, and the hedged spot price is a *synthetic identical-price leg*;
+real Binance XRP/USDT, Hyperliquid FXRP spot, basis, FXRP risk, FX/KRW,
+gas, transfer, tax, partial fills, liquidity and true maintenance margin
+are not included. USD values are simulations, not guaranteed KRW cash
+income. Do not treat USDC, FXRP or collateral as KRW safety funds.
+
+### Example read-only request
+
+```text
+GET /api/funding?coin=XRP&days=30&notional=10000&spotFeeBps=10&perpFeeBps=4.5&slippageBps=5
+```
+
+All parameters are validated and public requests are bounded. Supported
+time windows: 30 or 90 days. Default fee assumptions are editable in UI
+and must be verified for the user's exchange/tier before any conclusion.
+
+Run the zero-network deterministic model tests with Node 22+:
+
+```bash
+npm run test:funding
+```
+
+Official information: [Info endpoint](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals),
+[fees](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees).

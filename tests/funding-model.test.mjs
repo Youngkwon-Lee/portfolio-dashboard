@@ -66,3 +66,20 @@ test("90d uses 2160 actual hourly settlements, not scaled 30d yield",()=>{
   assert.equal(out.hourly_settlements,2160);
   assert.equal(out.curve.length,91);
 });
+
+test("missing or malformed funding rates are rejected instead of becoming silent zeros",()=>{
+  for(const fundingRate of [null, "", "  ", false, {}, "abc", 0.041]) {
+    const bad=fixture(); bad.funding[0].fundingRate=fundingRate;
+    assert.throws(()=>calculateFundingSimulation(bad),/Invalid funding rate/);
+  }
+  const scientific=fixture({fundingRate:"1e-5"});
+  assert.ok(calculateFundingSimulation(scientific).gross_funding_usd>0);
+});
+test("intrahour high stress precedes that hour's funding credit",()=>{
+  const input=fixture({fundingRate:0});
+  input.candles[0].h="199";
+  input.funding[0].fundingRate="0.04";
+  const out=calculateFundingSimulation(input);
+  assert.equal(out.minimum_short_equity_pct,1);
+  assert.equal(out.short_margin_stress_warning,true);
+});

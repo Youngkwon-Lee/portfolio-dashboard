@@ -145,8 +145,7 @@ negative funding is a **cost** for the short. Entry/exit commission and
 slippage are modeled separately. The account-margins path uses intrahour
 perp highs as an indicative stress proxy, not actual liquidation logic.
 
-**Scope limits:** Hyperliquid perp candle close is a proxy for settlement
-mark price, and the hedged spot price is a *synthetic identical-price leg*;
+**Scope limits:** Hyperliquid funding settlements use **oracle price**; perp candle close is only a proxy for the oracle price, and the hedged spot price is a *synthetic identical-price leg*;
 real Binance XRP/USDT, Hyperliquid FXRP spot, basis, FXRP risk, FX/KRW,
 gas, transfer, tax, partial fills, liquidity and true maintenance margin
 are not included. USD values are simulations, not guaranteed KRW cash

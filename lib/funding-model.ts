@@ -100,7 +100,7 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
     // Assuming the funding arrived first can overstate a short's margin buffer.
     const collateralHigh = x.notionalUsd + quantity*(entry-c.h) + funded - openPerpCost;
     rateSum += rate;
-    // Funding is settled at mark price; candle close is a marked approximation.
+    // Funding uses the oracle price; perp candle close is only a proxy for it.
     funded += value*rate;
     const pricePnl = quantity*(entry-c.c);
     const closePerp = value*(feePerp+slip), closeSpot=value*(feeSpot+slip);
@@ -144,7 +144,7 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
     short_margin_stress_warning:minShort<x.notionalUsd*0.15,
     assumptions:[
       "과거 펀딩비 부호를 그대로 적용: 양수는 숏 수취, 음수는 숏 지급.",
-      "시간별 펀딩 정산 명목금액은 고정 코인 수량 × Hyperliquid 선물 시간봉 종가로 근사. 실제 마크가격/정산액과 다름.",
+      "시간별 펀딩 정산 명목금액은 고정 코인 수량 × Hyperliquid 선물 시간봉 종가로 근사. 실제 오라클 가격 및 정산액과 다름.",
       "헤지용 현물은 동일한 가격의 가상 자산. 외부 거래소 현물 가격·FXRP/USDC·베이시스·디페그·상환 제한은 미반영.",
       "1배 숏에는 명목금액만큼 별도 USDC 담보, 가상 현물+숏에는 약 두 배의 총자본 필요.",
       "수수료와 슬리피지는 각 포지션 진입·청산 모두 반영. 환전·가스·브리지·세금은 제외.",

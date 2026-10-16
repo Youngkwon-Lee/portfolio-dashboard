@@ -98,6 +98,18 @@ function verify(coin,days,funding,candles) {
 try {
   for (const coin of COINS) {
     const [funding,candles]=await Promise.all([fundingHistory(coin),hourlyCandles(coin)]);
+    const offGrid = funding.filter(row => row.time % HOUR_MS !== 0);
+    const first = funding[0]?.time, last = funding.at(-1)?.time;
+    console.log("COVERAGE_DEBUG=" + JSON.stringify({
+      coin, funding_count: funding.length, candle_count: candles.length,
+      first_utc: first === undefined ? null : new Date(first).toISOString(),
+      last_utc: last === undefined ? null : new Date(last).toISOString(),
+      first_timestamp_ms: first, last_timestamp_ms: last,
+      funding_off_grid_count: offGrid.length,
+      funding_off_grid_examples: offGrid.slice(0,3).map(x=>({time:x.time, utc:new Date(x.time).toISOString(),rate:x.fundingRate})),
+      first_candle_utc: new Date(candles[0].t).toISOString(),
+      last_candle_utc: new Date(candles.at(-1).t).toISOString()
+    }));
     output.push(verify(coin,30,funding,candles));
     output.push(verify(coin,90,funding,candles));
   }

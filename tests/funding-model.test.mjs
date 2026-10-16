@@ -83,3 +83,19 @@ test("intrahour high stress precedes that hour's funding credit",()=>{
   assert.equal(out.minimum_short_equity_pct,1);
   assert.equal(out.short_margin_stress_warning,true);
 });
+
+test("real public API settlement timestamps a few milliseconds after the hour are aligned",()=>{
+  const x=fixture();
+  x.funding.forEach((row,i)=>{row.time += 1+(i%90);});
+  const out=calculateFundingSimulation(x);
+  assert.equal(out.hourly_settlements,720);
+  assert.equal(out.gross_funding_usd,720);
+});
+test("out-of-tolerance timestamps or duplicate aligned hourly settlements fail closed",()=>{
+  const late=fixture();
+  late.funding[0].time += 60_001;
+  assert.throws(()=>calculateFundingSimulation(late),/Invalid funding time/);
+  const duplicate=fixture();
+  duplicate.funding[1].time=duplicate.funding[0].time+11;
+  assert.throws(()=>calculateFundingSimulation(duplicate),/duplicate/);
+});

@@ -5,7 +5,8 @@
  * evidence that this model predicts future cash returns.
  */
 import { appendFile } from "node:fs/promises";
-import { calculateFundingSimulation, HOUR_MS, DAY_MS } from "../lib/funding-model.ts";
+import { calculateFundingSimulation, HOUR_MS, DAY_MS,
+  normalizeSettlementHour, FUNDING_SETTLEMENT_TOLERANCE_MS } from "../lib/funding-model.ts";
 
 const URL = "https://api.hyperliquid.xyz/info";
 const COINS = ["BTC", "ETH", "XRP"];
@@ -38,7 +39,8 @@ async function fundingHistory(coin) {
   const rows = [];
   let cursor = start90 + 1;
   for (let page = 0; page < 7 && cursor <= end; page++) {
-    const raw = await query({type:"fundingHistory",coin,startTime:cursor,endTime:end});
+    const raw = await query({type:"fundingHistory",coin,startTime:cursor,
+      endTime:end+FUNDING_SETTLEMENT_TOLERANCE_MS});
     if (!Array.isArray(raw) || raw.length > 500 || raw.length === 0) {
       if (Array.isArray(raw) && raw.length === 0) break;
       throw new Error("Malformed funding page for " + coin);
@@ -46,7 +48,7 @@ async function fundingHistory(coin) {
     let last = cursor - 1;
     for (const row of raw) {
       if (!row || !Number.isSafeInteger(row.time) || row.time < cursor ||
-          row.time > end || row.time <= last ||
+          row.time > end+FUNDING_SETTLEMENT_TOLERANCE_MS || row.time <= last ||
           (typeof row.fundingRate !== "string" && typeof row.fundingRate !== "number")) {
         throw new Error("Invalid or unsorted funding data for " + coin);
       }
@@ -56,10 +58,14 @@ async function fundingHistory(coin) {
     cursor = last + 1;
     if (raw.length < 500) break;
   }
-  if (rows.length !== maxRecords) throw new Error(
-    coin + " funding incomplete: expected 2160 hourly rows, received " + rows.length
+  const inWindow=rows.filter(row=>{
+    const hour=normalizeSettlementHour(row.time);
+    return hour>start90 && hour<=end;
+  });
+  if (inWindow.length !== maxRecords) throw new Error(
+    coin + " funding incomplete: expected 2160 hourly rows, received " + inWindow.length
   );
-  return rows;
+  return inWindow;
 }
 async function hourlyCandles(coin) {
   const raw = await query({type:"candleSnapshot",req:{
@@ -78,7 +84,7 @@ function verify(coin,days,funding,candles) {
   const simulation = calculateFundingSimulation({
     coin,days,startMs,endMs:end,notionalUsd:10000,
     spotFeeBps:10,perpFeeBps:4.5,slippageBps:5,
-    funding: funding.filter(x=>x.time>startMs),
+    funding: funding.filter(x=>normalizeSettlementHour(x.time)>startMs),
     candles: candles.filter(x=>x.t>=startMs)
   });
   return {
@@ -106,6 +112,7 @@ try {
       last_utc: last === undefined ? null : new Date(last).toISOString(),
       first_timestamp_ms: first, last_timestamp_ms: last,
       funding_off_grid_count: offGrid.length,
+      maximum_funding_offset_ms: Math.max(...funding.map(row=>Math.abs(row.time-normalizeSettlementHour(row.time)))),
       funding_off_grid_examples: offGrid.slice(0,3).map(x=>({time:x.time, utc:new Date(x.time).toISOString(),rate:x.fundingRate})),
       first_candle_utc: new Date(candles[0].t).toISOString(),
       last_candle_utc: new Date(candles.at(-1).t).toISOString()

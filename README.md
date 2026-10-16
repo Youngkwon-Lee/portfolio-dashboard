@@ -136,7 +136,7 @@ Hyperliquid public `fundingHistory` and `candleSnapshot` APIs via Next.js
 `GET /api/funding`. No trading keys, wallet auth, live orders, or transfers
 are created. Existing KIS/Upbit/Binance account/order endpoints remain blocked.
 
-The analysis uses exactly **720** hourly settlements for 30 days, or **2160**
+The analysis accepts exchange posting-time jitter within ±60 seconds of the UTC hourly settlement only. Aligned duplicates and missing hourly settlements fail closed without interpolation.\n\nThe analysis uses exactly **720** hourly settlements for 30 days, or **2160**
 for 90 days. Missing/duplicated data or upstream failures produce HTTP 503,
 not fabricated percentage returns. It compares (a) isolated 1x short with
 USD-sized collateral to (b) synthetic same-asset spot long + 1x short with

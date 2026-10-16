@@ -1,6 +1,7 @@
 /** Read-only, strict-coverage Hyperliquid perpetual funding research; never place orders. */
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = HOUR_MS * 24;
+export const FUNDING_SETTLEMENT_TOLERANCE_MS = 60_000;
 export type FundingCoin = "BTC" | "ETH" | "XRP";
 export type FundingDays = 30 | 90;
 export interface FundingRecord { time: number; fundingRate: string | number }
@@ -54,6 +55,18 @@ function rateNumber(value: unknown): number {
   if (!Number.isFinite(n) || Math.abs(n) > 0.04) throw Error("Invalid funding rate");
   return n;
 }
+/** Hyperliquid fundingHistory timestamps may be milliseconds after UTC hour.
+ * Only align within 60 seconds; never fill, interpolate or deduplicate hours.
+ */
+export function normalizeSettlementHour(time: number): number {
+  if (!Number.isSafeInteger(time)) throw Error("Invalid funding time");
+  const hour = Math.round(time / HOUR_MS) * HOUR_MS;
+  if (!Number.isSafeInteger(hour) ||
+      Math.abs(time - hour) > FUNDING_SETTLEMENT_TOLERANCE_MS) {
+    throw Error("Invalid funding time");
+  }
+  return hour;
+}
 export function calculateFundingSimulation(x: FundingInputs): FundingResult {
   if (!["BTC","ETH","XRP"].includes(x.coin) || ![30,90].includes(x.days)) throw Error("Unsupported market/window");
   if (!Number.isFinite(x.notionalUsd) || x.notionalUsd < 100 || x.notionalUsd > 1000000) throw Error("Invalid notional");
@@ -63,9 +76,10 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
   const feeSpot = bps(x.spotFeeBps), feePerp = bps(x.perpFeeBps), slip = bps(x.slippageBps);
   const funding = new Map<number, number>();
   for (const f of x.funding) {
-    if (!Number.isSafeInteger(f.time) || f.time % HOUR_MS || f.time <= x.startMs
-      || f.time > x.endMs || funding.has(f.time)) throw Error("Bad or duplicate funding time");
-    funding.set(f.time, rateNumber(f.fundingRate));
+    const settlementHour = normalizeSettlementHour(f.time);
+    if (settlementHour <= x.startMs || settlementHour > x.endMs
+      || funding.has(settlementHour)) throw Error("Bad or duplicate funding time");
+    funding.set(settlementHour, rateNumber(f.fundingRate));
   }
   const candles = new Map<number, {o:number;c:number;h:number;l:number}>();
   for (const candle of x.candles) {
@@ -144,6 +158,7 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
     short_margin_stress_warning:minShort<x.notionalUsd*0.15,
     assumptions:[
       "과거 펀딩비 부호를 그대로 적용: 양수는 숏 수취, 음수는 숏 지급.",
+      "거래소 원본 펀딩 정산시간의 밀리초 지연만 ±60초 범위에서 정시로 정렬. 누락·중복 시간은 보간하지 않고 거부.",
       "시간별 펀딩 정산 명목금액은 고정 코인 수량 × Hyperliquid 선물 시간봉 종가로 근사. 실제 오라클 가격 및 정산액과 다름.",
       "헤지용 현물은 동일한 가격의 가상 자산. 외부 거래소 현물 가격·FXRP/USDC·베이시스·디페그·상환 제한은 미반영.",
       "1배 숏에는 명목금액만큼 별도 USDC 담보, 가상 현물+숏에는 약 두 배의 총자본 필요.",

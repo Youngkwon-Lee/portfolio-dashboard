@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   calculateFundingSimulation, DAY_MS, HOUR_MS,
+  normalizeSettlementHour, FUNDING_SETTLEMENT_TOLERANCE_MS,
   type FundingCoin, type FundingDays, type FundingRecord, type PerpCandle
 } from "@/lib/funding-model";
 
@@ -34,12 +35,13 @@ async function fetchFunding(coin:FundingCoin,start:number,end:number):Promise<Fu
   let cursor=start+1;
   // Hyperliquid time-range endpoint caps pages at 500 records.
   for (let page=0;page<7 && cursor<=end;page++){
-    const raw=await queryInfo({type:"fundingHistory",coin,startTime:cursor,endTime:end});
+    const raw=await queryInfo({type:"fundingHistory",coin,startTime:cursor,
+      endTime:end+FUNDING_SETTLEMENT_TOLERANCE_MS});
     if (!Array.isArray(raw) || raw.length>500) throw Error("Bad funding page");
     if (raw.length===0) break;
     let maxTime=cursor-1;
     for(const item of raw){
-      if(!item || !Number.isSafeInteger(item.time) || item.time<cursor || item.time>end
+      if(!item || !Number.isSafeInteger(item.time) || item.time<cursor || item.time>end+FUNDING_SETTLEMENT_TOLERANCE_MS
         || !Number.isFinite(Number(item.fundingRate))) throw Error("Bad funding record");
       result.push({time:item.time,fundingRate:item.fundingRate});
       maxTime=Math.max(maxTime,item.time);
@@ -48,7 +50,10 @@ async function fetchFunding(coin:FundingCoin,start:number,end:number):Promise<Fu
     cursor=maxTime+1;
     if(raw.length<500) break;
   }
-  return result.filter(v=>v.time>start && v.time<=end);
+  return result.filter(v=>{
+    const settledHour=normalizeSettlementHour(v.time);
+    return settledHour>start && settledHour<=end;
+  });
 }
 async function fetchCandles(coin:FundingCoin,start:number,end:number):Promise<PerpCandle[]>{
   const raw=await queryInfo({type:"candleSnapshot",req:{

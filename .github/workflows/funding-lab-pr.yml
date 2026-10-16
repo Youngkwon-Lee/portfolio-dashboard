@@ -46,6 +46,12 @@ jobs:
         run: npm run typecheck
       - name: Build application without deployment
         run: npm run build
+      - name: Install Korean font for screenshot legibility
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-nanum
+          fc-cache -f
+          fc-match "sans:lang=ko"
       - name: Install pinned headless browser driver
         run: npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.55.1
       - name: Funding Lab headless Chrome UI + public API smoke

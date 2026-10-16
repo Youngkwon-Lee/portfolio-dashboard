@@ -67,7 +67,7 @@ const browser=await chromium.launch({
   headless:true,args:["--no-sandbox","--disable-dev-shm-usage"]
 });
 await mkdir(screenshotDir,{recursive:true});
-const page=await browser.newPage({viewport:{width:1320,height:900},deviceScaleFactor:1});
+const page=await browser.newPage({viewport:{width:1320,height:1500},deviceScaleFactor:1});
 let mockedRequests=0, mode="success";
 const timeout=45_000;
 try{
@@ -132,7 +132,7 @@ try{
 
   // This final request does NOT use a fixture. It exercises the actual Next
   // public route and the external Hyperliquid unauthenticated API.
-  await page.setViewportSize({width:1320,height:900});
+  await page.setViewportSize({width:1320,height:1500});
   await page.getByRole("button",{name:"XRP",exact:true}).click();
   await page.getByRole("button",{name:"30일",exact:true}).click();
   const pending=page.waitForResponse(r=>r.url().includes("/api/funding?"),{timeout:75000});
@@ -153,8 +153,12 @@ try{
   await page.screenshot({path:screenshotDir+"/funding-desktop-LIVE-PUBLIC.png",fullPage:true});
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:screenshotDir+"/funding-mobile-LIVE-PUBLIC.png",fullPage:true});
+  const fundingMain=page.locator("main").first();
+  await fundingMain.evaluate(element=>{element.scrollTop=550;});
+  await page.waitForTimeout(250);
+  await page.screenshot({path:screenshotDir+"/funding-mobile-LIVE-PUBLIC-results.png",fullPage:true});
   console.log("FUNDING_UI_SMOKE_OK "+JSON.stringify({
-    browser:"headless Chrome",screenshots:4,fixtures:mockedRequests,
+    browser:"headless Chrome",screenshots:5,fixtures:mockedRequests,
     verified_live_exchange_hours:live.hourly_settlements,
     live_coin:live.coin,live_days:live.days,execution_mode:live.execution_mode,
     live_hedged_net_usd:live.hedged_net_usd,mobile_overflow:width

@@ -10,6 +10,7 @@ on:
       - components/**
       - lib/**
       - tests/**
+      - scripts/**
       - backend/**
       - package.json
       - package-lock.json
@@ -23,6 +24,7 @@ on:
       - components/**
       - lib/**
       - tests/**
+      - scripts/**
       - backend/**
       - package.json
       - package-lock.json
@@ -75,3 +77,17 @@ jobs:
           PORTFOLIO_DB_PATH: ${{ runner.temp }}/portfolio-ci.db
           TRADING_SAFETY_STATE_PATH: ${{ runner.temp }}/trading-safety-ci.json
         run: python -m unittest discover -s backend/tests -v
+
+  market-data-smoke:
+    name: Hyperliquid 30/90-day public data audit (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    # An upstream outage must not suppress the deterministic safety checks.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Read-only live market-data completeness audit
+        run: node --experimental-strip-types scripts/funding-public-smoke.mjs

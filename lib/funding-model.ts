@@ -169,3 +169,10 @@ export function calculateFundingSimulation(x: FundingInputs): FundingResult {
     curve
   };
 }
+/** Never publish held-to-expiry returns from a path whose 1x short collateral
+ * was already exhausted in the intrahour-high stress proxy. This is a
+ * conservative validity gate, not an exchange-certified liquidation engine.
+ */
+export function fundingResultReportable(result: FundingResult): boolean {
+  return result.short_collateral_breach_in_proxy === false;
+}

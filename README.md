@@ -281,3 +281,80 @@ The JSON is analyzed only in browser memory; the output is visibly marked
 \`user_supplied_unverified\` and is not combined into the verified live
 exchange ranking. It is **not** a validated investment return. No file,
 credentials, or personal balances are sent to Quant Lab servers.
+
+
+### Hourly path and isolated-margin stress (stacked Draft, PAPER ONLY)
+
+The Funding Lab includes an additional **시간별 베이시스 · 1배 숏 증거금 경로**
+panel. This research feature is **not** an exchange liquidation engine and does
+not place orders, query accounts, transmit selected files or modify balances.
+
+To use it, supply an independently authorized and verified source of
+synchronized hourly spot and perpetual OHLC candles and actual funding
+settlements for exactly **720 (30d)** or **2160 (90d)** contiguous UTC hours.
+The **user-supplied** bundle has these keys:
+
+\`\`\`json
+{
+  "format": "quant-lab-hourly-path-v1",
+  "venue": "OKX",
+  "coin": "XRP",
+  "days": 30,
+  "start": 1789617600000,
+  "end": 1792209600000,
+  "notionalUsd": 10000,
+  "sourceUrl": "https://www.okx.com/",
+  "funding": [{"time": 1789646400000, "rate": 0.0001}],
+  "candles": [
+    {"time":1789617600000,
+     "spot":{"open":1,"high":1.01,"low":0.99,"close":1},
+     "perp":{"open":1,"high":1.02,"low":0.98,"close":1}}
+  ]
+}
+\`\`\`
+
+**The snippet above is deliberately incomplete and MUST be rejected.** Full
+data must include each UTC hour in the requested window, with correct
+high/low and open/close. \`funding\` contains **observed** exchange
+settlements; the model validates settlement continuity through the existing
+venue-specific engine. Historical data from other tokens, wrapped FXRP or
+different instruments must not be silently substituted.
+
+A local offline converter can create this JSON from independently normalized
+CSV inputs:
+
+\`\`\`bash
+node scripts/funding-build-hourly-path.mjs OKX XRP 30 \
+  2026-09-17T04:00:00Z spot.csv perp.csv funding.csv \
+  https://www.okx.com/ ./hourly-research.json
+\`\`\`
+
+Both spot and perp CSV files require exactly
+\`time,open,high,low,close\` with **millisecond UTC** timestamps; funding
+requires \`time,rate\`. The converter never downloads or uploads data.
+It refuses to overwrite an existing output file. A source URL is a user claim,
+not authenticated provenance; a SHA256 digest proves file integrity, not origin.
+
+Model behavior:
+- Same-quantity spot and isolated 1x short, **separate** spot capital and
+  short collateral. The model uses observed spot/perp closes and historical
+  signed funding rates to estimate daily basis, funding and net equity.
+- The assumed maintenance margin rate is configurable **0–10%** and is
+  **not** automatically derived from exchange-specific leverage brackets,
+  risk tiers, fee/liquidation rules or cross/portfolio margin.
+- For short risk, each hourly **perpetual high** is tested *before* that
+  hour's funding is credited. This is a conservative stress proxy; OHLC does
+  not reveal intrahour ordering, synchronized spot/perp extremes, true
+  liquidation fills or funding mark/oracle prices.
+- If any hour crosses the assumed maintenance margin buffer, the model
+  marks a **possible breach** and suppresses the entire held-to-end return,
+  rather than assuming the position survived. A positive buffer does **not**
+  prove a trade would avoid liquidation.
+- Real trade P&L, maximum possible loss, intrahour realized drawdown,
+  maintenance tier transitions, financing, ADL, transfer latency, order
+  book depth, stablecoin/FXRP risk, tax and KRW conversion are **not** verified.
+- Browser File API parses the JSON entirely in memory and never sends it to
+  the Quant Lab server. Results are labeled \`user_supplied_unverified\`.
+
+Run offline regression with \`npm run test:funding\`. No live trading or
+production deployment is authorized by this feature.

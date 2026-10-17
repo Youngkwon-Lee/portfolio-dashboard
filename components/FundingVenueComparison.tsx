@@ -1,7 +1,7 @@
 "use client";
 import {useRef,useState} from "react";
 import type {Asset,VenueComparison} from "@/lib/funding-venues";
-type Result=Partial<VenueComparison>&{venue:string;status:"basis_verified"|"funding_only"|"unavailable";error?:string;basis_warning?:string};
+type Result=Omit<Partial<VenueComparison>,"venue"|"status">&{venue:string;status:"basis_verified"|"funding_only"|"unavailable";error?:string;basis_warning?:string};
 const fmt=(n:number|null|undefined)=>n===null||n===undefined?"—":new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:2}).format(n);
 const pct=(n:number|null|undefined)=>n===null||n===undefined?"—":(n>0?"+":"")+n.toFixed(3)+"%";
 const panel={background:"var(--card)",borderColor:"var(--card-border)"};

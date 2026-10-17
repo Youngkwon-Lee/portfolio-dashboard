@@ -68,7 +68,8 @@ export async function GET(req:NextRequest){
   const p=req.nextUrl.searchParams;
   const coin=p.get("coin")??"XRP";
   const days=validNumber(p.get("days"),30,30,90);
-  const amount=validNumber(p.get("notional"),10000,100,1000000);
+  // A default single-leg notional of $250 represents $500 total spot + short collateral.
+  const amount=validNumber(p.get("notional"),250,100,1000000);
   const spotFee=validNumber(p.get("spotFeeBps"),10,0,100);
   const perpFee=validNumber(p.get("perpFeeBps"),4.5,0,100);
   const slip=validNumber(p.get("slippageBps"),5,0,100);

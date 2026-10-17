@@ -251,8 +251,46 @@ try{
   assert.equal(localUploadRequests,0,"Invalid local file unexpectedly caused network request");
   page.removeListener("request",uploadWatch);
   await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
+  // New hourly margin-risk panel: synthetic 720-hour OHLC input, no upload.
+  const hourMs=3600000,firstHour=Date.parse("2026-07-01T00:00:00Z");
+  const riskBundle={
+    format:"quant-lab-hourly-path-v1",venue:"OKX",coin:"XRP",days:30,
+    start:firstHour,end:firstHour+720*hourMs,notionalUsd:10000,
+    sourceUrl:"https://www.okx.com/",
+    funding:Array.from({length:90},(_,i)=>({time:firstHour+(i+1)*8*hourMs,rate:.0001})),
+    candles:Array.from({length:720},(_,i)=>({
+      time:firstHour+i*hourMs,
+      spot:{open:100,high:100,low:100,close:100},
+      perp:{open:100,high:100,low:100,close:100}
+    }))
+  };
+  const riskFile=page.getByLabel("시간별 위험 연구 파일");
+  await riskFile.scrollIntoViewIfNeeded({timeout});
+  let riskNonGet=0;
+  const riskListener=req=>{if(req.method()!=="GET")riskNonGet++;};
+  page.on("request",riskListener);
+  await riskFile.setInputFiles({
+    name:"SYNTHETIC-hourly-720.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify(riskBundle))
+  });
+  await page.getByText("사용자 제공 자료 · 원본 진위 미확인 · PAPER ONLY").waitFor({timeout});
+  await page.getByText("관측 시간봉 고가에서 가정한 증거금 버퍼 소진은 확인되지 않았습니다.",{exact:false}).waitFor({timeout});
+  assert.equal(riskNonGet,0,"Hourly local file generated a network write");
+  await labelScreenshot(page);
+  await page.screenshot({path:screenshotDir+"/funding-hourly-SYNTHETIC-MOCK.png",fullPage:true});
+  riskBundle.candles[4].perp.high=210;
+  await riskFile.setInputFiles({
+    name:"SYNTHETIC-hourly-breach.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify(riskBundle))
+  });
+  await page.getByText("가정된 유지증거금 버퍼가",{exact:false}).waitFor({timeout});
+  await page.getByText("검증 불가",{exact:true}).first().waitFor({timeout});
+  assert.equal(riskNonGet,0,"Hourly breach file generated a network write");
+  page.removeListener("request",riskListener);
+  await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
   console.log("FUNDING_UI_SMOKE_OK "+JSON.stringify({
-    browser:"headless Chrome",screenshots:8,fixtures:mockedRequests,
+    browser:"headless Chrome",screenshots:9,fixtures:mockedRequests,
+    hourly_synthetic_file:true,hourly_breach_suppressed:true,hourly_upload_requests:riskNonGet,
     local_file_synthetic_fixture:true,local_file_invalid_rejected:true,local_upload_requests:localUploadRequests,
     mock_ui_cases:caseResults,responsive_checks:responsiveChecks,
     verified_live_exchange_hours:live.hourly_settlements,

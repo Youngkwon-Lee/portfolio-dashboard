@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowDownUp, BarChart3, FlaskConical, RefreshCcw, Shield
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-model";
 import FundingVenueComparison from "@/components/FundingVenueComparison";
+import FundingLocalImport from "@/components/FundingLocalImport";
 
 const BLUE = "#58a6ff";
 const GREEN = "#3fb986";
@@ -64,6 +65,7 @@ export default function FundingPage(){
       </div>
 
       <FundingVenueComparison />
+      <FundingLocalImport />
 
       <section className={PANEL} style={PANEL_STYLE} aria-label="분석 설정">
         <div className="flex flex-wrap items-end justify-between gap-4">

@@ -87,6 +87,6 @@ export default function FundingVenueComparison(){
     <p>실제 청산가·중간 최대 손실·마진 규칙·베이시스 경로는 아직 미검증입니다. 현물 헤지가 다른 거래소에 있다면 숏 청산을 방지하지 못합니다.</p>
    </div>
   </>}
-  <p className="text-xs" style={{color:"var(--muted)"}}>PAPER ONLY · 공개 GET 데이터만 조회 · API 키·주문·자금 이동 없음 · 원화 생활비 안전자금 대체 불가</p>
+  <p className="text-xs" style={{color:"var(--muted)"}}>PAPER ONLY · 인증 없는 공개 시세 API만 조회 · API 키·주문·자금 이동 없음 · 원화 생활비 안전자금 대체 불가</p>
  </section>;
 }

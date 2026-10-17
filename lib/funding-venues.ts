@@ -39,6 +39,8 @@ export function evaluateVenue(x:VenueInput):VenueComparison{
   const slip=bounded(x.slippageBps,0,100,"slippage")/1e4;
   const maxGap=x.venue==="Hyperliquid"?HOUR:8*HOUR;
   if(!Array.isArray(x.funding)||!x.funding.length)throw Error("Funding history missing");
+  if(x.venue==="Hyperliquid" && x.funding.length!==x.days*24)
+    throw Error("Hyperliquid hourly funding count mismatch");
   const rows=[...x.funding].sort((a,b)=>a.time-b.time);
   let previous=x.start,rateSum=0;
   for(const row of rows){

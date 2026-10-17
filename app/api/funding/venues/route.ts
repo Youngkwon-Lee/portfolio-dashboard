@@ -151,7 +151,7 @@ async function venueResult(venue:Venue,coin:Asset,days:30|90,start:number,end:nu
     // Basis snapshot failures must be visible, never silently assume spot == perp.
     let entry:SpotPerpSnapshot|null=null,exit:SpotPerpSnapshot|null=null,basisError:string|null=null;
     if(venue!=="Hyperliquid"){
-      try{[entry,exit]=await Promise.all([snapshot(venue,coin,start),snapshot(venue,coin,end-HOUR)]);}
+      try{[entry,exit]=await Promise.all([snapshot(venue,coin,start),snapshot(venue,coin,end)]);}
       catch{basisError="현물·선물 동시간대 과거 가격을 확인하지 못함";}
     }else basisError="현물·선물 실제 베이시스 미지원 (FXRP 포함 토큰별 검증 필요)";
     const value=evaluateVenue({venue,coin,days,start,end,notionalUsd:notional,

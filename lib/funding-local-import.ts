@@ -2,7 +2,7 @@
  * User-supplied, LOCAL-ONLY research bundle. No upload, network, credentials,
  * trade endpoints or persistence. Source URL is a claim, not authenticated.
  */
-import {evaluateVenue,type VenueInput,type VenueComparison,type Venue,type Asset} from "./funding-venues";
+import {evaluateVenue,type VenueInput,type VenueComparison,type Venue,type Asset} from "./funding-venues.ts";
 export type LocalBundle = {
   format:"quant-lab-funding-bundle-v1";
   venue:"Binance"|"Bybit";coin:Asset;days:30|90;
@@ -53,7 +53,7 @@ export function parseLocalBundle(text:string):LocalBundle{
  }
  // All values validated structurally; evaluateVenue performs settlement,
  // basis, fee and interval checks, and refuses incomplete history.
- return raw as LocalBundle;
+ return raw as unknown as LocalBundle;
 }
 export function evaluateLocalBundle(text:string,fee:{
   spotFeeBps:number;perpFeeBps:number;slippageBps:number

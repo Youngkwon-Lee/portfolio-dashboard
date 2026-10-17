@@ -429,3 +429,56 @@ audit remains available and **no fallback mark prices or tiers are invented**.
 Sources: https://app.okx.com/docs-v5/en/ (mark-price history, public instruments,
 position tiers); https://www.okx.com/en-us/help/liquidation-faq and
 https://www.okx.com/en-us/help/v-tiered-maintenance-margin-ratio-rules .
+
+
+### Personal portfolio reserve analysis (private, paper only)
+
+Funding Lab includes a **생활비 안전자금 · 크립토 투자 한도** panel.
+There is **no connected personal balance**: \`lib/mockData.ts\` and
+\`hooks/usePortfolio.ts\` contain synthetic stock/crypto holdings and
+a synthetic ₩5,000,000 cash fallback; these values must NEVER be used
+as real user assets or spending.
+
+The new client-side-only module \`lib/funding-portfolio-reserve.ts\` accepts
+a user-prepared JSON snapshot with **no account numbers, wallet addresses,
+API keys or identifying data**. Example **illustrative only** (not actual holdings):
+
+\`\`\`json
+{
+  "snapshotDate": "2026-10-17T05:00:00Z",
+  "krwBankCash": 0,
+  "krwBankDepositsAvailableWithin2Days": 0,
+  "essentialMonthlyKrw": 2000000,
+  "reserveMonths": 12,
+  "nearTermObligationsKrw": 0,
+  "fundingAllocationCapPct": 0,
+  "holdings": [
+    {"asset":"XRP","venue":"Example Exchange","category":"crypto",
+     "valueKrw":0,"availableInDays":1,"encumbered":false}
+  ]
+}
+\`\`\`
+
+The example is **not a statement** of the user's spending, cash, holdings,
+or investment allocation. Fill it from current bank and exchange statements
+without including private identifiers.
+
+- \`essentialMonthlyKrw\`: total **essential** monthly expenses, not the
+  user's desired monthly income. \`reserveMonths\`: 3–24, user-selected.
+  \`nearTermObligationsKrw\`: nonmonthly payments due during the reserve horizon.
+- Only KRW bank cash and bank deposits accessible within 2 days count
+  toward the safety reserve. Stablecoins and exchange balances are
+  **not** counted as KRW bank cash, even if quickly tradeable.
+- Unencumbered crypto/stablecoins available within 2 days form a separate
+  **at-risk investment pool**. Locked, staked, DeFi-collateralized and
+  withdrawal-delayed positions are excluded from the funding strategy budget.
+- If the KRW safety reserve is below target, the proposed new funding
+  allocation is **0**, irrespective of how much crypto is held. If covered,
+  the user-chosen allocation cap (0–20%) limits *research-only* strategy
+  capital. A 1x spot/short model splits that capital into separate spot
+  and short collateral legs; this is not a live trading instruction.
+- The client reads local files with \`File.text()\` and computes in memory;
+  no server API, upload, persistence, order, or wallet access is used.
+- Funding yield is never booked as guaranteed or predictable monthly
+  living income. KRW prices, bank deposits, exchange availability and
+  balances are entirely user-supplied and **unverified**.

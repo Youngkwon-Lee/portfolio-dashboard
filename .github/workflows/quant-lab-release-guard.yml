@@ -1,0 +1,84 @@
+# Proposed CI workflow for manual review and addition to Draft PR #6.
+# Repository destination: .github/workflows/quant-lab-release-guard.yml
+# No deployment, secrets, personal data, or live-trading commands.
+name: Quant Lab Release Guard
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quant-lab-release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-preflight:
+    name: Quant Lab release preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      CI: "true"
+    steps:
+      - name: Check out PR without stored write credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Verify paper-only Vercel configuration
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const cfg = JSON.parse(fs.readFileSync('vercel.json', 'utf8'));
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (cfg.framework !== 'nextjs') throw Error('Unexpected Vercel framework');
+          if (cfg.buildCommand !== 'pnpm build' || cfg.installCommand !== 'pnpm install') {
+            throw Error('Unexpected build/install commands');
+          }
+          if (cfg.env && Object.hasOwn(cfg.env, 'NEXT_PUBLIC_API_URL')) {
+            throw Error('Stale Vercel secret reference remains');
+          }
+          if (!pkg.scripts?.build || !pkg.scripts?.typecheck) {
+            throw Error('Missing required application validation scripts');
+          }
+          console.log('PASS: Vercel project config contains no stale secret reference');
+          NODE
+
+      - name: Install exact lockfile dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript check
+        run: pnpm run typecheck
+
+      - name: Build Next.js application without deploying
+        run: pnpm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend test dependencies
+        run: python -m pip install --disable-pip-version-check -r backend/requirements.txt
+
+      - name: Run paper-only backend regression tests
+        env:
+          PORTFOLIO_DB_PATH: ${{ runner.temp }}/portfolio-ci.db
+          TRADING_SAFETY_STATE_PATH: ${{ runner.temp }}/trading-safety-ci.json
+        run: python -m unittest discover -s backend/tests -v

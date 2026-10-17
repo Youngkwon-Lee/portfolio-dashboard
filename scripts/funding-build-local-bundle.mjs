@@ -43,6 +43,30 @@ const [f,s,p]=await Promise.all([fundingFile,spotFile,perpFile].map(x=>readFile(
 const funding=csvRows(f,["time","rate"]);
 const spot=csvRows(s,["time","open"]);
 const perp=csvRows(p,["time","open"]);
+function verifyOrdered(rows,label){
+ let previous=-Infinity;
+ for(const row of rows){
+  if(row.time<=previous)fail(label+" must be strictly time-ordered without duplicates");
+  previous=row.time;
+ }
+}
+verifyOrdered(funding,"funding");
+verifyOrdered(spot,"spot");
+verifyOrdered(perp,"perp");
+if(funding[0].time<=start||funding.at(-1).time>end)
+ fail("Funding rows must be inside (start,end]");
+const maxGap=8*3600000;
+let previousFunding=start;
+for(const row of funding){
+ if(row.time-previousFunding>maxGap+60000)fail("Incomplete funding settlement coverage");
+ if(!Number.isFinite(row.rate)||Math.abs(row.rate)>.04)
+  fail("Invalid funding rate");
+ previousFunding=row.time;
+}
+if(end-previousFunding>=maxGap)fail("Incomplete funding tail");
+for(const row of [...spot,...perp]){
+ if(!Number.isFinite(row.open)||row.open<=0)fail("Invalid spot/perp price");
+}
 const spotMap=new Map(spot.map(x=>[x.time,x.open])),perpMap=new Map(perp.map(x=>[x.time,x.open]));
 function snapshot(time){
  const sp=spotMap.get(time),pp=perpMap.get(time);

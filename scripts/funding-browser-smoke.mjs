@@ -210,8 +210,50 @@ try{
   await fundingMain.evaluate(element=>{element.scrollTop=550;});
   await page.waitForTimeout(250);
   await page.screenshot({path:screenshotDir+"/funding-mobile-LIVE-PUBLIC-results.png",fullPage:true});
+  // Offline research upload-free test: browser File.text() only, not a network request.
+  // This is synthetic input, NOT historical exchange data.
+  const localStart=Date.parse("2026-07-01T00:00:00.000Z");
+  const localEnd=localStart+30*24*3600000;
+  const localFixture={
+    format:"quant-lab-funding-bundle-v1",venue:"Binance",coin:"XRP",days:30,
+    start:localStart,end:localEnd,notionalUsd:10000,
+    sourceUrl:"https://data.binance.vision/data/futures/um/",
+    downloadedAt:"2026-10-17T04:00:00Z",
+    funding:Array.from({length:90},(_,i)=>({
+      time:localStart+(i+1)*8*3600000,rate:0.0001
+    })),
+    entry:{time:localStart,spot:99,perp:100},
+    exit:{time:localEnd,spot:104,perp:106}
+  };
+  const fileControl=page.getByLabel("로컬 연구 파일");
+  await fileControl.scrollIntoViewIfNeeded({timeout});
+  let localUploadRequests=0;
+  const uploadWatch=req=>{
+    if(req.method()!=="GET" && !req.url().includes("api.hyperliquid.xyz"))
+      localUploadRequests++;
+  };
+  page.on("request",uploadWatch);
+  await fileControl.setInputFiles({
+    name:"LOCAL-SYNTHETIC-FIXTURE.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify(localFixture))
+  });
+  await page.getByText("사용자 제공 데이터 · 독립 검증 전").waitFor({timeout});
+  await page.getByText("Binance XRP · 30일 · 90건").waitFor({timeout});
+  assert.equal(localUploadRequests,0,"Local file unexpectedly caused non-GET request");
+  await labelScreenshot(page);
+  await page.screenshot({path:screenshotDir+"/funding-local-file-SYNTHETIC-MOCK.png",fullPage:true});
+  await fileControl.setInputFiles({
+    name:"LOCAL-INVALID.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify({...localFixture,apiKey:"must-not-be-accepted"}))
+  });
+  await page.getByText("로컬 데이터 거부:",{exact:false}).waitFor({timeout});
+  assert.equal(await page.getByText("사용자 제공 데이터 · 독립 검증 전").count(),0);
+  assert.equal(localUploadRequests,0,"Invalid local file unexpectedly caused network request");
+  page.removeListener("request",uploadWatch);
+  await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
   console.log("FUNDING_UI_SMOKE_OK "+JSON.stringify({
-    browser:"headless Chrome",screenshots:7,fixtures:mockedRequests,
+    browser:"headless Chrome",screenshots:8,fixtures:mockedRequests,
+    local_file_synthetic_fixture:true,local_file_invalid_rejected:true,local_upload_requests:localUploadRequests,
     mock_ui_cases:caseResults,responsive_checks:responsiveChecks,
     verified_live_exchange_hours:live.hourly_settlements,
     live_coin:live.coin,live_days:live.days,execution_mode:live.execution_mode,

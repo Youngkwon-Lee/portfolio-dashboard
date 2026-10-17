@@ -169,3 +169,115 @@ npm run test:funding
 
 Official information: [Info endpoint](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals),
 [fees](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees).
+
+
+## Funding Lab: 4-venue historical comparison (Draft / PAPER ONLY)
+
+The Funding Lab tab now offers a separate **4개 거래소** panel for BTC/ETH/XRP,
+30 or 90 days: Hyperliquid, Binance, Bybit and OKX. Its read-only route is
+\`GET /api/funding/venues?coin=XRP&days=30&notional=10000&spotFeeBps=10&perpFeeBps=5&slippageBps=5\`.
+All exchange calls use public historical data endpoints without keys. The
+result always has \`execution_mode: "paper"\`, \`live_allowed: false\`.
+
+- Funding uses **observed settlement timestamps and signed rates**, not a
+  synthetic fixed 8-hour schedule. Gaps larger than a venue's maximum expected
+  1/8-hour interval, duplicates, invalid values, or missing start/tail cause
+  **unavailable**, never extrapolated APY.
+- Binance: public USDⓈ-M \`/fapi/v1/fundingRate\`, Binance spot/perp \`klines\`.
+- Bybit: V5 \`/v5/market/funding/history\`, V5 spot/linear \`kline\`.
+- OKX: \`/api/v5/public/funding-rate-history\`, historical spot/swap \`history-candles\`.
+- Hyperliquid: \`fundingHistory\`; **funding-only** because FXRP/wrapped spot
+  and other spot symbols require separate validation. No synthetic equality
+  between spot and perpetual is allowed.
+- Observed **entry/exit basis** uses simultaneous hourly *open* candles on
+  spot and perpetual. Quantity is equal across legs, based on initial perp
+  notional. The total capital denominator is actual initial spot value plus
+  full 1x perp margin. Fee/slippage assumptions are adjustable.
+- Funding USD uses a **constant initial notional proxy**; the real hourly
+  oracle/mark price, basis path, intra-period forced liquidation, market depth,
+  borrow/financing, USDC/USDT/FXRP credit, FX, gas and tax are NOT measured.
+  The output is therefore an **estimated historical simulation**, not
+  realized net cash yield. The stress panel shows hypothetical +30/+50/+100%
+  upside shocks, not exchange-specific liquidation prices.
+- 90-day history is accepted **only** if the venue returns all required
+  settlement coverage. An exchange may restrict lookback or public access;
+  this is reported as unavailable, not silently filled from another venue.
+- Server response never contains an account, balance, token, API key,
+  trade instruction, order endpoint or transfer. No real trading or deployment
+  is authorized by this feature.
+
+Offline tests: \`npm run test:funding\`. GitHub Actions also checks type safety,
+Next.js build, existing backend paper-only regression, and public-data smoke.
+New code is in a **stacked Draft PR** on top of the original Funding Lab PR;
+neither should be merged or deployed to production without independent review.
+
+
+### Offline exchange archive review (no geoblock workaround)
+
+If the Vercel deployment receives Binance HTTP 451 or Bybit HTTP 403,
+the API **does not retry through proxies or alternate hostnames** and returns
+\`unavailable\`. For research, a user who is independently authorized to
+access the official archive can manually prepare an **offline** data bundle
+for a local browser-only analysis. The application does not download, upload,
+store, authenticate, or redistribute this file.
+
+- Official Binance historical archive: https://data.binance.vision/
+  and https://github.com/binance/binance-public-data
+- Official Bybit historical data documentation:
+  https://bybit-exchange.github.io/docs/v5/market/history-fund-rate
+  and https://www.bybit.com/future-activity/developer
+- Dataset licensing, user jurisdiction, market access and archive freshness
+  must be reviewed before downloading. A user-entered source URL and SHA256
+  are **not** independent proof of official provenance.
+
+The browser accepts a maximum 2MB local JSON bundle with **exactly** this
+schema (values below are placeholders, not historical prices/rates):
+
+\`\`\`json
+{
+  "format": "quant-lab-funding-bundle-v1",
+  "venue": "Binance",
+  "coin": "XRP",
+  "days": 30,
+  "start": 1790006400000,
+  "end": 1792598400000,
+  "notionalUsd": 10000,
+  "sourceUrl": "https://data.binance.vision/data/futures/um/",
+  "downloadedAt": "2026-10-17T00:00:00Z",
+  "funding": [{"time": 1790035200000, "rate": 0.0001}],
+  "entry": {"time": 1790006400000, "spot": 1, "perp": 1},
+  "exit": {"time": 1792598400000, "spot": 1, "perp": 1}
+}
+\`\`\`
+
+**Important:** the example intentionally contains **incomplete** funding
+history and should be **rejected** by the strict-coverage model. A valid file
+must include all observed settlements over the requested 30/90-day window.
+The start/end values must be exact UTC hour boundaries and exactly 30 or
+90 days apart. Spot and perpetual prices must be independently observed
+hourly opens at **the same** start and end timestamps. Data is not
+automatically assumed to be equivalent across different wrapped assets.
+
+An offline converter is available for already **normalized** CSV files.
+It never connects to any network:
+
+\`\`\`bash
+node scripts/funding-build-local-bundle.mjs Binance XRP 30 \
+  2026-09-17T04:00:00Z 2026-10-17T04:00:00Z \
+  funding.csv spot.csv perp.csv \
+  https://data.binance.vision/data/futures/um/ \
+  ./xrp-local-research.json
+\`\`\`
+
+The converter requires strict numeric headers \`time,rate\` for funding and
+\`time,open\` for each of spot/perp; time must be **Unix milliseconds**.
+Raw exchange archives can have different column names, time units and
+layouts. **Normalize them first** and independently verify against the
+published official source before use. In particular Binance spot archive
+timestamps from 2025 onward may be **microseconds** and must not be
+mistaken for milliseconds.
+
+The JSON is analyzed only in browser memory; the output is visibly marked
+\`user_supplied_unverified\` and is not combined into the verified live
+exchange ranking. It is **not** a validated investment return. No file,
+credentials, or personal balances are sent to Quant Lab servers.

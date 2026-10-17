@@ -4,6 +4,8 @@ import { useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowDownUp, BarChart3, FlaskConical, RefreshCcw, ShieldCheck, TrendingDown, Wallet } from "lucide-react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-model";
+import FundingVenueComparison from "@/components/FundingVenueComparison";
+import FundingLocalImport from "@/components/FundingLocalImport";
 
 const BLUE = "#58a6ff";
 const GREEN = "#3fb986";
@@ -61,6 +63,9 @@ export default function FundingPage(){
         <AlertTriangle size={17} className="mt-0.5 shrink-0" style={{color:"#eab361"}}/>
         <p><strong>생활비 안전자금은 별도 보관하세요.</strong> 본 연구는 실계좌를 조회하지 않으며, 원화 환전·세금·베이시스·실제 청산을 반영하지 않습니다.</p>
       </div>
+
+      <FundingVenueComparison />
+      <FundingLocalImport />
 
       <section className={PANEL} style={PANEL_STYLE} aria-label="분석 설정">
         <div className="flex flex-wrap items-end justify-between gap-4">

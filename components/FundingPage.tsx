@@ -2,12 +2,12 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowDownUp, BarChart3, FlaskConical, RefreshCcw, ShieldCheck, TrendingDown, Wallet } from "lucide-react";
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-model";
 import FundingVenueComparison from "@/components/FundingVenueComparison";
 import FundingLocalImport from "@/components/FundingLocalImport";
 import FundingHourlyRisk from "@/components/FundingHourlyRisk";
 import FundingPortfolioReserve from "@/components/FundingPortfolioReserve";
+import FundingPerformanceCharts from "@/components/FundingPerformanceCharts";
 
 const BLUE = "#58a6ff";
 const GREEN = "#3fb986";
@@ -20,7 +20,9 @@ const percent=(n:number)=>(n>0?"+":"")+n.toFixed(3)+"%";
 export default function FundingPage(){
   const [coin,setCoin]=useState<FundingCoin>("XRP");
   const [days,setDays]=useState<FundingDays>(30);
-  const [notional,setNotional]=useState("10000");
+  // Total paper capital splits evenly across spot and isolated 1x-short collateral.
+  const [totalCapital,setTotalCapital]=useState("500");
+  const notional=Number(totalCapital)/2;
   const [spotFee,setSpotFee]=useState("10");
   const [perpFee,setPerpFee]=useState("4.5");
   const [slippage,setSlippage]=useState("5");
@@ -29,8 +31,8 @@ export default function FundingPage(){
   const [error,setError]=useState("");
   const requestIdRef=useRef(0);
   const clear=()=>{requestIdRef.current++;setResult(null);setError("");setLoading(false);};
-  const inputsValid=[notional,spotFee,perpFee,slippage].every(x=>x.trim()!=="" && Number.isFinite(Number(x)))
-    && Number(notional)>=100 && Number(notional)<=1000000
+  const inputsValid=[totalCapital,spotFee,perpFee,slippage].every(x=>x.trim()!=="" && Number.isFinite(Number(x)))
+    && Number(totalCapital)>=200 && Number(totalCapital)<=2000000
     && [spotFee,perpFee,slippage].every(x=>Number(x)>=0 && Number(x)<=100);
 
   const analyze=async()=>{
@@ -38,7 +40,7 @@ export default function FundingPage(){
     const requestId=++requestIdRef.current;
     setResult(null);setError("");setLoading(true);
     try{
-      const query=new URLSearchParams({coin,days:String(days),notional,spotFeeBps:spotFee,perpFeeBps:perpFee,slippageBps:slippage});
+      const query=new URLSearchParams({coin,days:String(days),notional:String(notional),spotFeeBps:spotFee,perpFeeBps:perpFee,slippageBps:slippage});
       const response=await fetch("/api/funding?"+query.toString(),{cache:"no-store"});
       const data=await response.json();
       if(!response.ok) throw Error(typeof data?.error==="string"?data.error:"공개 데이터 조회 실패");
@@ -89,7 +91,7 @@ export default function FundingPage(){
                 style={{borderColor:days===value?BLUE:"var(--card-border)",background:days===value?"#58a6ff20":"transparent"}}>{value}일</button>)}
             </div>
           </div>
-          <NumberField label="한쪽 명목금액 (USD)" id="fund-notional" value={notional} setValue={v=>{setNotional(v);clear();}} min={100} max={1000000} step={100}/>
+          <NumberField label="모의 총자본 (USD)" id="fund-total-capital" value={totalCapital} setValue={v=>{setTotalCapital(v);clear();}} min={200} max={2000000} step={100}/>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <NumberField label="현물 편도 수수료 (bps)" id="fund-spot-fee" value={spotFee} setValue={v=>{setSpotFee(v);clear();}} min={0} max={100} step={0.5}/>
@@ -97,12 +99,12 @@ export default function FundingPage(){
           <NumberField label="각 주문 슬리피지 (bps)" id="fund-slippage" value={slippage} setValue={v=>{setSlippage(v);clear();}} min={0} max={100} step={0.5}/>
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-          <span className="text-xs" style={{color:MUTED}}>1배 숏 담보 ≈ {inputsValid?usd(Number(notional)):"—"} · 헤지 총자본 ≈ {inputsValid?usd(Number(notional)*2):"—"}</span>
+          <span className="text-xs" style={{color:MUTED}}>가상 현물 ≈ {inputsValid?usd(notional):"—"} · 1배 숏 담보 ≈ {inputsValid?usd(notional):"—"} · 총자본 ≈ {inputsValid?usd(Number(totalCapital)):"—"}</span>
           <button type="button" onClick={analyze} disabled={loading||!inputsValid}
             className="flex items-center gap-2 rounded-md px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
             style={{background:BLUE,color:"#09121c"}}><RefreshCcw size={15}/>{loading?"시간별 데이터 확인 중":"공개 데이터로 계산"}</button>
         </div>
-        {!inputsValid&&<p className="mt-2 text-xs" role="alert" style={{color:"#f5af55"}}>명목금액 100~1,000,000 USD, 비용 0~100bps 범위로 입력하세요.</p>}
+        {!inputsValid&&<p className="mt-2 text-xs" role="alert" style={{color:"#f5af55"}}>총자본 200~2,000,000 USD (각 레그 100~1,000,000 USD), 비용 0~100bps 범위로 입력하세요.</p>}
       </section>
 
       {error&&<div role="alert" className="rounded-lg border p-4 text-sm" style={{background:"#fa767614",borderColor:"#fa767666"}}>
@@ -120,45 +122,43 @@ export default function FundingPage(){
           <span>UTC {result.start_utc.slice(0,16)} — {result.end_utc.slice(0,16)}</span>
           <span>Hyperliquid 공개 API</span>
         </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Kpi title="누적 펀딩비 (비용 전)" value={usd(result.gross_funding_usd)} detail={"단순 연환산 "+percent(result.funding_simple_annualized_pct)} icon={<Wallet size={17}/>} color={BLUE}/>
-          <Kpi title={result.coin+" 1배 숏 단독"} value={usd(result.short_net_usd)} detail={percent(result.short_return_pct)+" · 숏 담보 기준"} icon={<TrendingDown size={17}/>} color={result.short_net_usd>=0?"#3fb986":"#fa7676"}/>
-          <Kpi title="가상 현물 + 1배 숏" value={usd(result.hedged_net_usd)} detail={percent(result.hedged_return_on_total_capital_pct)+" · 총 투입자본 기준"} icon={<ArrowDownUp size={17}/>} color={result.hedged_net_usd>=0?"#3fb986":"#fa7676"}/>
+          <Kpi title="거래비용 합계" value={"−"+usd(result.perp_fees_usd+result.spot_fees_usd+result.slippage_usd)}
+            detail="현물·선물 왕복 수수료 + 슬리피지" icon={<BarChart3 size={17}/>} color="#fa9f69"/>
+          <Kpi title="헤지 최종 순손익" value={usd(result.hedged_net_usd)}
+            detail={percent(result.hedged_return_on_total_capital_pct)+" · 총자본 기준 · 비용 반영"}
+            icon={<ArrowDownUp size={17}/>} color={result.hedged_net_usd>=0?GREEN:"#fa7676"}/>
+          <Kpi title={result.coin+" 1배 숏 단독"} value={usd(result.short_net_usd)}
+            detail={percent(result.short_return_pct)+" · 숏 담보 기준 · 가격변동 포함"}
+            icon={<TrendingDown size={17}/>} color={result.short_net_usd>=0?GREEN:"#fa7676"}/>
         </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1.4fr_1fr]">
-          <section className={PANEL} style={PANEL_STYLE}>
-            <h2 className="font-semibold">누적 손익 (USD)</h2>
-            <p className="mb-4 mt-1 text-xs" style={{color:MUTED}}>시간별 정산 기록을 일 단위로 집계한 가상 청산 손익</p>
-            <div className="h-[270px] w-full" role="img" aria-label="펀딩비와 숏·헤지 누적손익 그래프">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={result.curve} margin={{top:10,right:10,left:10,bottom:5}}>
-                  <CartesianGrid stroke="#ffffff15" vertical={false}/>
-                  <XAxis dataKey="time" tickFormatter={(v:string)=>v.slice(5,10)} minTickGap={24} tick={{fill:"#a3a8b4",fontSize:11}}/>
-                  <YAxis tickFormatter={(v:number)=>"$"+Math.round(v)} tick={{fill:"#a3a8b4",fontSize:11}} width={58}/>
-                  <Tooltip formatter={value=>usd(Number(value??0))} labelFormatter={v=>String(v).slice(0,16)+" UTC"} contentStyle={{background:"#121923",border:"1px solid #30363d",borderRadius:8}}/>
-                  <Legend wrapperStyle={{fontSize:12}}/>
-                  <Line dataKey="fundingUsd" name="펀딩비" stroke={BLUE} dot={false} strokeWidth={2} isAnimationActive={false}/>
-                  <Line dataKey="shortNetUsd" name="1배 숏 순손익" stroke="#fa9f69" dot={false} strokeWidth={2} isAnimationActive={false}/>
-                  <Line dataKey="hedgedNetUsd" name="현물+숏 순손익" stroke="#3fb986" dot={false} strokeWidth={2} isAnimationActive={false}/>
-                </LineChart>
-              </ResponsiveContainer>
+        <FundingPerformanceCharts result={result}/>
+        <section className={PANEL} style={PANEL_STYLE}>
+          <h2 className="mb-2 font-semibold">손익 구성 · 숏 증거금 위험</h2>
+          <p className="mb-3 text-xs" style={{color:MUTED}}>헤지 순손익 = 수취·지급 펀딩비 − 선물·현물 왕복 수수료 − 두 레그 슬리피지. 가격 상쇄는 동일 가상 가격 기준입니다.</p>
+          <div className="grid grid-cols-1 gap-x-8 lg:grid-cols-2">
+            <div>
+              <Metric name="펀딩비 총액 (비용 전)" value={usd(result.gross_funding_usd)}/>
+              <Metric name="선물 왕복 수수료" value={"−"+usd(result.perp_fees_usd)}/>
+              <Metric name="현물 왕복 수수료" value={"−"+usd(result.spot_fees_usd)}/>
+              <Metric name="헤지 총 슬리피지" value={"−"+usd(result.slippage_usd)}/>
+              <Metric name="헤지 최종 순손익" value={usd(result.hedged_net_usd)}/>
             </div>
-          </section>
-          <section className={PANEL} style={PANEL_STYLE}>
-            <h2 className="mb-2 font-semibold">가격·비용·증거금</h2>
-            <Metric name="가격 변화 (선물 종가 대용치)" value={percent(result.price_change_pct)}/>
-            <Metric name="숏 가격 손익" value={usd(result.short_price_pnl_usd)}/>
-            <Metric name="선물 왕복 수수료" value={"−"+usd(result.perp_fees_usd)}/>
-            <Metric name="현물 왕복 수수료" value={"−"+usd(result.spot_fees_usd)}/>
-            <Metric name="헤지 총 슬리피지" value={"−"+usd(result.slippage_usd)}/>
-            <Metric name="숏 최저 가상 증거금 여유" value={result.minimum_short_equity_pct.toFixed(1)+"%"}/>
-            <p className="mt-3 rounded-md p-3 text-xs" style={{color:result.short_margin_stress_warning?"#f5af55":MUTED,background:result.short_margin_stress_warning?"#f5af5514":"#58a6ff12"}}>
-              {result.short_collateral_breach_in_proxy?"과거 가격 경로에서 숏 가상 담보가 소진됐습니다. 실제 포지션은 더 일찍 청산될 수 있습니다."
-                :result.short_margin_stress_warning?"숏 담보 여유가 크게 감소했습니다. 실제 청산 여부는 모델링하지 않았습니다."
-                :"시간봉 고가 기반의 과거 위험 근사값이며 실제 청산 가능성이 없다는 뜻은 아닙니다."}
-            </p>
-          </section>
-        </div>
+            <div>
+              <Metric name="가격 변화 (선물 종가 대용치)" value={percent(result.price_change_pct)}/>
+              <Metric name="숏 단독 가격 손익" value={usd(result.short_price_pnl_usd)}/>
+              <Metric name="숏 단독 순손익 (펀딩 포함)" value={usd(result.short_net_usd)}/>
+              <Metric name="숏 최저 가상 담보잔고 (초기 대비)" value={result.minimum_short_equity_pct.toFixed(1)+"%"}/>
+              <p className="mt-3 rounded-md p-3 text-xs" role="note"
+                style={{color:result.short_margin_stress_warning?"#f5af55":MUTED,background:result.short_margin_stress_warning?"#f5af5514":"#58a6ff12"}}>
+                {result.short_collateral_breach_in_proxy?"과거 가격 경로에서 숏 가상 담보가 소진됐습니다. 실제 포지션은 더 일찍 청산될 수 있습니다."
+                  :result.short_margin_stress_warning?"숏 담보 여유가 크게 감소했습니다. 실제 청산 여부는 모델링하지 않았습니다."
+                  :"시간봉 고가 기반 과거 위험 근사값입니다. 실제 청산가격·유지증거금과 다르며 안전을 보장하지 않습니다."}
+              </p>
+            </div>
+          </div>
+        </section>
         <section className={PANEL} style={PANEL_STYLE}>
           <h2 className="mb-3 font-semibold">전제·제외한 위험</h2>
           <ul className="space-y-2 text-xs leading-relaxed" style={{color:MUTED}}>

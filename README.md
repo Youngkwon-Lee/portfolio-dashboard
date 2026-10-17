@@ -358,3 +358,37 @@ Model behavior:
 
 Run offline regression with \`npm run test:funding\`. No live trading or
 production deployment is authorized by this feature.
+
+
+### OKX official public historical audit (read-only; non-blocking)
+
+\`scripts/funding-okx-hourly-audit.mjs\` retrieves public **XRP-USDT spot**
+and **XRP-USDT-SWAP** confirmed hourly OHLC candles plus **realized funding
+settlements** using only documented OKX public GET endpoints:
+
+- \`/api/v5/market/history-candles\` (100 rows/page; \`after\` means older)
+- \`/api/v5/public/funding-rate-history\` (100 rows/page; \`after\` means older)
+
+The bounded script checks **2160 consecutive closed hours**, validates funding
+continuity, and produces **separate 30/90-day summaries** using the same UTC
+end boundary. It runs in the existing non-blocking CI market-data job, without
+creating a new runner. Maximum 70 public requests, 12s timeout per request,
+100ms pacing, no credentials, wallet, trades, writes, or private data.
+
+\`\`\`bash
+OKX_AUDIT_COIN=XRP node --experimental-strip-types scripts/funding-okx-hourly-audit.mjs
+\`\`\`
+
+The printed \`OKX_HOURLY_AUDIT_RESULT\` includes a SHA256 hash of its JSON
+summary, number of calls, source, time window, margin-buffer breach proxy,
+and null net return if any assumed buffer breach occurs. **The summary
+does not prove that hourly OHLC extremes were executable, the funding
+mark/oracle was the candle close, the position could be maintained, or that
+actual exchange liquidation tiers were modeled.** It is a retrospective
+research stress proxy. The output is never merged into account balances,
+automatic trading, or cash-flow projections.
+
+Deterministic mocked API pagination tests are part of
+\`npm run test:funding\`. If the OKX public endpoint is unavailable,
+rate-limited or returns incomplete history, the live audit fails closed and
+no 30/90-day result is asserted. It does not use proxy/geoblock bypass.

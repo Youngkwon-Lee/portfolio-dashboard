@@ -4,6 +4,7 @@
  * One 90d collection produces 30d and 90d independent hourly stress reports.
  */
 import {evaluateHourlyPath} from "../lib/funding-hourly-risk.ts";
+import {evaluateMarkRisk} from "../lib/funding-okx-mark-risk.ts";
 import {createHash} from "node:crypto";
 const H=3600000,DAY=86400000,API="https://www.okx.com";
 const coin=process.env.OKX_AUDIT_COIN||"XRP";
@@ -12,7 +13,7 @@ const end=process.env.OKX_AUDIT_END?Date.parse(process.env.OKX_AUDIT_END):Math.f
 if(!Number.isSafeInteger(end)||end%H!==0||end>Date.now()||end<Date.now()-3*DAY)
  throw Error("End must be a recent, completed UTC hour");
 const start90=end-90*DAY;
-const maxRequests=70;let requests=0;
+const maxRequests=80;let requests=0;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function publicGET(path,params){
  if(++requests>maxRequests)throw Error("Public request cap exceeded");
@@ -116,12 +117,82 @@ for(const days of [30,90]){
   committed_capital_usd:result.capital_committed_usd
  });
 }
+// Optional official mark + current tier overlay. Never silently replace missing
+// mark data with last-traded price, and never claim current tiers are historical.
+let markOverlay={status:"not_requested"};
+if(process.env.OKX_MARK_AUDIT==="1"){
+ try{
+  const instId=coin+"-USDT-SWAP";
+  const [tiersRaw,instruments]=await Promise.all([
+   publicGET("/api/v5/public/position-tiers",{
+    instType:"SWAP",tdMode:"isolated",instFamily:coin+"-USDT"
+   }),
+   publicGET("/api/v5/public/instruments",{instType:"SWAP",instId})
+  ]);
+  const inst=instruments.find(x=>x.instId===instId);
+  if(!inst||inst.ctValCcy!==coin||inst.ctType!=="linear")
+   throw Error("Unsupported instrument contract metadata");
+  const tierSnapshot={
+   instId,tdMode:"isolated",fetchedAt:new Date().toISOString(),
+   ctVal:number(inst.ctVal,"ctVal"),ctValCcy:inst.ctValCcy,
+   ctMult:number(inst.ctMult||"1","ctMult"),
+   tiers:tiersRaw.map(x=>({
+    tier:String(x.tier),maxSz:number(x.maxSz,"maxSz"),mmr:number(x.mmr,"mmr")
+   })).sort((a,b)=>a.maxSz-b.maxSz)
+  };
+  if(!tierSnapshot.tiers.length)throw Error("No public isolated maintenance tiers");
+  const found=new Map();let cursor=end+H;
+  for(let page=0;page<26;page++){
+   const data=await publicGET("/api/v5/market/history-mark-price-candles",{
+    instId,bar:"1H",after:cursor,limit:100
+   });
+   if(!data.length)break;
+   let oldest=cursor;
+   for(const row of data){
+    if(!Array.isArray(row)||row.length<6)throw Error("Invalid mark OHLC schema");
+    const time=number(row[0],"mark time");
+    if(!Number.isSafeInteger(time)||time>=cursor||time>=oldest||time%H)
+     throw Error("Unordered mark candles");
+    oldest=time;
+    if(time>=start90&&time<end){
+     if(found.has(time)||String(row[5])!=="1")throw Error("Duplicate or unconfirmed mark candle");
+     const [open,high,low,close]=row.slice(1,5).map(x=>number(x,"mark OHLC"));
+     found.set(time,{time,open,high,low,close});
+    }
+   }
+   cursor=oldest;
+   if(oldest<=start90)break;
+  }
+  const ordered=[...found.values()].sort((a,b)=>a.time-b.time);
+  if(ordered.length!==2160)throw Error("Incomplete historical mark price candles");
+  for(let i=0;i<2160;i++)if(ordered[i].time!==start90+i*H)
+   throw Error("Mark-price hourly gap");
+  markOverlay={
+   status:"current_tier_retrospective_scenario",
+   results:[30,90].map(days=>{
+    const start=end-days*DAY,offset=2160-days*24;
+    const v=evaluateMarkRisk({
+     coin,start,end,notionalUsd:10000,entryPerp:perp[offset].open,
+     markCandles:ordered.slice(offset),
+     funding:settlements.filter(x=>x.time>start&&x.time<=end),
+     tierSnapshot,assumedLiquidationTakerFeeRate:.0005
+    });
+    return v;
+   })
+  };
+ }catch(error){
+  markOverlay={status:"unavailable",reason_code:
+   /HTTP/.test(String(error))?"public_endpoint_http_failure":
+   /tier|instrument|contract/i.test(String(error))?"tier_snapshot_unverified":
+   "mark_history_or_schema_unverified"};
+ }
+}
 const payload={source:"OKX public market/history-candles and public/funding-rate-history",
  provenance:"public_api_observed_ohlc_not_execution_verified",
  mode:"paper",live_allowed:false,coin,request_count:requests,
  model:"hourly-high isolated short margin buffer, constant coin quantity, oracle funding proxy",
  costs:"spot 10bps, perp 5bps, slippage 5bps each side, illustrative",
  risks:"Maintenance rate .5% assumed; OHLC high/low non-synchronous; real mark-price liquidation, funding oracle, order book, FX, taxes and forced fills unverified",
- results:out};
+ results:out,mark_overlay:markOverlay};
 const hash=createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 console.log("OKX_HOURLY_AUDIT_RESULT "+JSON.stringify({...payload,sha256:hash}));

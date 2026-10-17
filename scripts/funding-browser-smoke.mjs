@@ -19,32 +19,39 @@ function requirePath(p) {
   return existsSync(p);
 }
 
-function fakeResult(coin,days){
+function fakeResult(coin,days,notional){
+  // Values are synthetic and scale with the total-paper-capital control;
+  // the 1x short receives the same notional as the spot leg.
   const end=Date.parse("2026-10-16T09:00:00.000Z");
   const start=end-days*86400000;
-  const net=coin==="XRP"?55.24:coin==="ETH"?35.92:28.77;
+  const scale=notional/10000;
+  const round=n=>Number(n.toFixed(2));
+  const baseNet=coin==="XRP"?55.24:coin==="ETH"?35.92:28.77;
+  const funding=round((baseNet+49)*scale);
+  const shortNet=round((baseNet+30)*scale);
+  const net=round(baseNet*scale);
   return {
     execution_mode:"paper",live_allowed:false,
     source:"E2E FIXTURE (NOT LIVE)",
-    coin,days,notional_usd:10000,combined_capital_usd:20000,
+    coin,days,notional_usd:notional,combined_capital_usd:notional*2,
     start_utc:new Date(start).toISOString(),end_utc:new Date(end).toISOString(),
     hourly_settlements:days*24,first_funding_utc:new Date(start+3600000).toISOString(),
     last_funding_utc:new Date(end).toISOString(),entry_price_proxy:1,
     exit_price_proxy:1,price_change_pct:0,funding_rate_sum_pct:0.9,
-    funding_simple_annualized_pct:11.1,gross_funding_usd:105.36,
-    spot_price_pnl_usd:0,short_price_pnl_usd:0,perp_fees_usd:9,
-    spot_fees_usd:20,slippage_usd:20,short_net_usd:86.36,
-    hedged_net_usd:net,short_return_pct:0.8636,
-    hedged_return_on_total_capital_pct:Number((net/200).toFixed(4)),
+    funding_simple_annualized_pct:11.1,gross_funding_usd:funding,
+    spot_price_pnl_usd:0,short_price_pnl_usd:0,perp_fees_usd:round(9*scale),
+    spot_fees_usd:round(20*scale),slippage_usd:round(20*scale),
+    short_net_usd:shortNet,hedged_net_usd:net,short_return_pct:Number((shortNet/notional*100).toFixed(4)),
+    hedged_return_on_total_capital_pct:Number((net/(notional*2)*100).toFixed(4)),
     minimum_short_equity_pct:86,short_collateral_breach_in_proxy:false,
     short_margin_stress_warning:false,
     assumptions:["Deterministic E2E browser test fixture — do not infer investment returns."],
     curve:Array.from({length:days+1},(_,i)=>({
       time:new Date(start+i*86400000).toISOString(),
-      fundingUsd:Number((105.36*i/days).toFixed(2)),
-      shortNetUsd:Number((86.36*i/days).toFixed(2)),
-      hedgedNetUsd:Number((net*i/days).toFixed(2)),
-      shortMarginEquityUsd:10000
+      fundingUsd:round(funding*i/days),
+      shortNetUsd:round(shortNet*i/days),
+      hedgedNetUsd:round(net*i/days),
+      shortMarginEquityUsd:round(notional*.86)
     }))
   };
 }
@@ -76,6 +83,9 @@ try{
   await page.getByRole("heading",{name:"펀딩비 · 헤지 순수익 분석"}).waitFor({timeout});
   assert.equal(await page.getByText("PAPER ONLY · 실거래 차단").count(),1);
   assert.equal(await page.getByText("공개 데이터 기반 손익 비교").count(),1);
+  assert.equal(await page.locator("#fund-total-capital").inputValue(),"500",
+    "The default is $500 TOTAL paper capital, not per-leg notional");
+  assert.ok(await page.getByText("가상 현물 ≈ $250.00",{exact:false}).count()>0);
   await page.route("**/api/funding?**",async route=>{
     mockedRequests++;
     const reqUrl=new URL(route.request().url());
@@ -89,16 +99,19 @@ try{
     const days=Number(reqUrl.searchParams.get("days"));
     assert.ok(["BTC","ETH","XRP"].includes(coin));
     assert.ok([30,90].includes(days));
+    assert.equal(reqUrl.searchParams.get("notional"),"250",
+      "UI must transmit half of the $500 total budget to the single-leg API");
     return route.fulfill({
       status:200,contentType:"application/json",
-      body:JSON.stringify(fakeResult(coin,days))
+      body:JSON.stringify(fakeResult(coin,days,250))
     });
   });
   const run=page.getByRole("button",{name:"공개 데이터로 계산"});
   await run.click();
   await page.getByText("720시간 정산",{exact:false}).waitFor({timeout});
-  await page.getByText("$55.24",{exact:true}).waitFor({timeout});
-  assert.ok(await page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"}).isVisible());
+  await page.getByText("$1.38",{exact:true}).waitFor({timeout});
+  assert.ok(await page.getByRole("img",{name:"1배 숏 단독 순손익 그래프"}).isVisible());
+  assert.ok(await page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"}).isVisible());
   await labelScreenshot(page);
   const responsiveChecks=[];
   // Regress 4 layout widths, including narrow phones and tablet.
@@ -107,27 +120,37 @@ try{
     await page.waitForTimeout(350); // allow chart resize observer to settle
     // On 320px screens the results are below an INNER scrolling <main>.
     // Explicitly scroll the real chart into view before asserting rendering.
-    const chart=page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"});
-    await chart.scrollIntoViewIfNeeded({timeout});
+    const hedgeChart=page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"});
+    const shortChart=page.getByRole("img",{name:"1배 숏 단독 순손익 그래프"});
+    await hedgeChart.scrollIntoViewIfNeeded({timeout});
+    await shortChart.scrollIntoViewIfNeeded({timeout});
     await page.waitForTimeout(450);
     const bounds=await page.evaluate(()=>{
       const main=document.querySelector("main");
       // TopBar also contains a small Recharts sparkline (14px on phones).
       // Never measure the first Recharts SVG globally: scope to Funding Lab.
-      const chartElement=document.querySelector('[role="img"][aria-label="펀딩비와 숏·헤지 누적손익 그래프"]');
-      const responsive=chartElement?.querySelector(".recharts-responsive-container");
-      const lineCurves=[...(chartElement?.querySelectorAll("path.recharts-line-curve")??[])]
-        .filter(path=>(path.getAttribute("d")??"").length>10);
+      const chartElements=[
+        document.querySelector('[role="img"][aria-label="펀딩비와 헤지 순손익 그래프"]'),
+        document.querySelector('[role="img"][aria-label="1배 숏 단독 순손익 그래프"]')
+      ];
+      const responsiveWidths=chartElements.map(el=>el?.querySelector(".recharts-responsive-container")?.getBoundingClientRect().width??0);
+      const chartWidths=chartElements.map(el=>el?.getBoundingClientRect().width??0);
+      const chartHeights=chartElements.map(el=>el?.getBoundingClientRect().height??0);
+      const lineCurves=chartElements.map(el=>[...(el?.querySelectorAll("path.recharts-line-curve")??[])]
+        .filter(path=>(path.getAttribute("d")??"").length>10));
+      const flatLines=lineCurves.flat();
       return {
         viewport:window.innerWidth,
         pageScrollWidth:document.documentElement.scrollWidth,
         mainClientWidth:main?.clientWidth??0,
         mainScrollWidth:main?.scrollWidth??0,
-        responsiveWidth:responsive?.getBoundingClientRect().width??0,
-        chartContainerWidth:chartElement?.getBoundingClientRect().width??0,
-        chartHeight:chartElement?.getBoundingClientRect().height??0,
-        renderedCurveCount:lineCurves.length,
-        widestCurve:Math.max(0,...lineCurves.map(path=>path.getBoundingClientRect().width)),
+        responsiveWidth:Math.min(...responsiveWidths),
+        chartContainerWidth:Math.min(...chartWidths),
+        chartHeight:Math.min(...chartHeights),
+        hedgeCurveCount:lineCurves[0].length,
+        shortCurveCount:lineCurves[1].length,
+        renderedCurveCount:flatLines.length,
+        widestCurve:Math.max(0,...flatLines.map(path=>path.getBoundingClientRect().width)),
         mainScrollTop:main?.scrollTop??0,
       };
     });
@@ -139,7 +162,7 @@ try{
       "Funding page overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));
     assert.ok(bounds.chartContainerWidth>170 && bounds.responsiveWidth>170,
       "Funding chart container missing at "+widthPx+"px: "+JSON.stringify(bounds));
-    assert.ok(bounds.renderedCurveCount>=3 && bounds.widestCurve>70,
+    assert.ok(bounds.hedgeCurveCount===2 && bounds.shortCurveCount===1 && bounds.renderedCurveCount===3 && bounds.widestCurve>70,
       "Funding chart data curves not rendered at "+widthPx+"px: "+JSON.stringify(bounds));
     assert.ok(await run.isVisible(),"Analyze button hidden at "+widthPx+"px");
     await page.screenshot({
@@ -150,7 +173,7 @@ try{
 
   // Changing any input must invalidate stale KPI and graph results.
   await page.getByRole("button",{name:"BTC",exact:true}).click();
-  assert.equal(await page.getByText("$55.24",{exact:true}).count(),0);
+  assert.equal(await page.getByText("$1.38",{exact:true}).count(),0);
   // Exercise the real React state + chart for every coin and both windows.
   // Market responses in this loop are clearly-labeled synthetic E2E fixtures.
   const caseResults=[];
@@ -163,22 +186,22 @@ try{
       await run.click();
       const count=(days*24).toLocaleString("en-US");
       await page.getByText(count+"시간 정산",{exact:false}).waitFor({timeout});
-      const expected=coin==="XRP"?"$55.24":coin==="BTC"?"$28.77":"$35.92";
+      const expected=coin==="XRP"?"$1.38":coin==="BTC"?"$0.72":"$0.90";
       await page.getByText(expected,{exact:true}).waitFor({timeout});
-      assert.ok(await page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"}).isVisible());
+      assert.ok(await page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"}).isVisible());
       caseResults.push({coin,days,records:days*24,fixture:true});
     }
   }
 
-  await page.locator("#fund-notional").fill("0");
+  await page.locator("#fund-total-capital").fill("0");
   assert.ok(await run.isDisabled(),"Invalid notional should disable analysis");
-  await page.locator("#fund-notional").fill("10000");
+  await page.locator("#fund-total-capital").fill("500");
 
   mode="error";
   await run.click();
   await page.getByText("검증 불가",{exact:true}).waitFor({timeout});
   await page.getByText("공개 데이터 불완전: 모의 에러 응답").waitFor({timeout});
-  assert.equal(await page.getByText("$35.92",{exact:true}).count(),0);
+  assert.equal(await page.getByText("$0.90",{exact:true}).count(),0);
   assert.ok(mockedRequests>=8,"Expected 6 combinations, initial success and failure requests");
   await page.unroute("**/api/funding?**");
   await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
@@ -202,7 +225,8 @@ try{
   assert.equal(live.days,30);
   assert.equal(live.hourly_settlements,720);
   await page.getByText("720시간 정산",{exact:false}).waitFor({timeout});
-  await page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"}).waitFor({timeout});
+  await page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"}).waitFor({timeout});
+  await page.getByRole("img",{name:"1배 숏 단독 순손익 그래프"}).waitFor({timeout});
   await page.screenshot({path:screenshotDir+"/funding-desktop-LIVE-PUBLIC.png",fullPage:true});
   await page.setViewportSize({width:390,height:844});
   await page.screenshot({path:screenshotDir+"/funding-mobile-LIVE-PUBLIC.png",fullPage:true});

@@ -4,7 +4,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import {
-  calculateFundingSimulation, DAY_MS, HOUR_MS,
+  calculateFundingSimulation, fundingResultReportable, DAY_MS, HOUR_MS,
   normalizeSettlementHour, FUNDING_SETTLEMENT_TOLERANCE_MS,
   type FundingCoin, type FundingDays, type FundingRecord, type PerpCandle
 } from "@/lib/funding-model";
@@ -88,6 +88,16 @@ export async function GET(req:NextRequest){
       spotFeeBps:spotFee,perpFeeBps:perpFee,slippageBps:slip,
       startMs:start,endMs:end,funding,candles
     });
+    // A price path that exhausts the model's isolated 1x short collateral
+    // cannot support an assumed-held-to-expiry PnL. Suppress any return,
+    // even if the raw funding sum happens to be positive.
+    if (!fundingResultReportable(result)) {
+      return NextResponse.json({
+        error:"시간봉 고가 기준 가상 숏 담보가 소진된 경로입니다. 실제 청산이 더 일찍 발생할 수 있어 기간 전체의 모의 수익률을 표시하지 않습니다.",
+        execution_mode:"paper", live_allowed:false,
+        margin_proxy_breach:true
+      },{status:422,headers:{"Cache-Control":"no-store"}});
+    }
     return NextResponse.json(result,{headers:{"Cache-Control":"private, no-store"}});
   }catch{
     // Fail closed. Do not extrapolate an APY when hourly coverage or upstream data fails.

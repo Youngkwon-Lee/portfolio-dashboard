@@ -6,7 +6,7 @@ function setup({spike=false}={}){
  const candles=[];
  for(let i=0;i<2160;i++){
   const t=START+i*H;
-  candles.push([String(t),"100",spike&&i===100?"220":"100","100","100","0","0","0","1"]);
+  candles.push([String(t),"100",spike&&i===1600?"220":"100","100","100","0","0","0","1"]);
  }
  const funding=[];
  for(let t=START+8*H;t<=END;t+=8*H)

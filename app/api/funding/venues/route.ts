@@ -1,6 +1,7 @@
 /** Public exchange data only: GET/Hyperliquid public info; no credentials or trading endpoints. */
 import {NextRequest,NextResponse} from "next/server";
 import {evaluateVenue,type Venue,type Asset,type Settlement,type SpotPerpSnapshot} from "@/lib/funding-venues";
+import {normalizeSettlementHour} from "@/lib/funding-model";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=60;
@@ -44,7 +45,7 @@ async function hyper(coin:Asset,start:number,end:number):Promise<Settlement[]>{
     }
     cursor=last+1;if(data.length<500)break;
   }
-  return rows.filter(x=>x.time>start&&x.time<=end+60000);
+  return rows.filter(x=>{const h=normalizeSettlementHour(x.time);return h>start&&h<=end;});
 }
 async function binance(coin:Asset,start:number,end:number):Promise<Settlement[]>{
   const symbol=coin+"USDT",rows:Settlement[]=[];let cursor=start;
@@ -157,9 +158,17 @@ async function venueResult(venue:Venue,coin:Asset,days:30|90,start:number,end:nu
     const value=evaluateVenue({venue,coin,days,start,end,notionalUsd:notional,
       spotFeeBps:spotFee,perpFeeBps:perpFee,slippageBps:slippage,funding:rows,entry,exit});
     return {...value,basis_warning:basisError};
-  }catch{
+  }catch(error){
+    const message=error instanceof Error?error.message:"unknown";
+    const code=message.startsWith("Exchange public API HTTP ")?
+      "upstream_http_"+message.slice("Exchange public API HTTP ".length):
+      /gap|missing|count mismatch|tail|Incomplete/i.test(message)?"history_incomplete":
+      /Invalid|Unsorted|malformed/i.test(message)?"invalid_exchange_data":
+      /unavailable/i.test(message)?"upstream_unavailable":"request_failed";
+    console.warn("[funding-venues] read-only unavailable",venue,code);
     return {venue,coin,days,execution_mode:"paper" as const,live_allowed:false as const,
-      status:"unavailable" as const,error:"정산 내역의 시간 범위·완전성 또는 공개 API를 검증하지 못했습니다. 수익률은 표시하지 않습니다."};
+      status:"unavailable" as const,error_code:code,
+      error:"정산 내역의 시간 범위·완전성 또는 공개 API를 검증하지 못했습니다. 수익률은 표시하지 않습니다."};
   }
 }
 function param(p:URLSearchParams,key:string,fallback:number,min:number,max:number):number|null{

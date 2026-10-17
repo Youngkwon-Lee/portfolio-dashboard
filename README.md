@@ -169,3 +169,44 @@ npm run test:funding
 
 Official information: [Info endpoint](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals),
 [fees](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees).
+
+
+## Funding Lab: 4-venue historical comparison (Draft / PAPER ONLY)
+
+The Funding Lab tab now offers a separate **4개 거래소** panel for BTC/ETH/XRP,
+30 or 90 days: Hyperliquid, Binance, Bybit and OKX. Its read-only route is
+\`GET /api/funding/venues?coin=XRP&days=30&notional=10000&spotFeeBps=10&perpFeeBps=5&slippageBps=5\`.
+All exchange calls use public historical data endpoints without keys. The
+result always has \`execution_mode: "paper"\`, \`live_allowed: false\`.
+
+- Funding uses **observed settlement timestamps and signed rates**, not a
+  synthetic fixed 8-hour schedule. Gaps larger than a venue's maximum expected
+  1/8-hour interval, duplicates, invalid values, or missing start/tail cause
+  **unavailable**, never extrapolated APY.
+- Binance: public USDⓈ-M \`/fapi/v1/fundingRate\`, Binance spot/perp \`klines\`.
+- Bybit: V5 \`/v5/market/funding/history\`, V5 spot/linear \`kline\`.
+- OKX: \`/api/v5/public/funding-rate-history\`, historical spot/swap \`history-candles\`.
+- Hyperliquid: \`fundingHistory\`; **funding-only** because FXRP/wrapped spot
+  and other spot symbols require separate validation. No synthetic equality
+  between spot and perpetual is allowed.
+- Observed **entry/exit basis** uses simultaneous hourly *open* candles on
+  spot and perpetual. Quantity is equal across legs, based on initial perp
+  notional. The total capital denominator is actual initial spot value plus
+  full 1x perp margin. Fee/slippage assumptions are adjustable.
+- Funding USD uses a **constant initial notional proxy**; the real hourly
+  oracle/mark price, basis path, intra-period forced liquidation, market depth,
+  borrow/financing, USDC/USDT/FXRP credit, FX, gas and tax are NOT measured.
+  The output is therefore an **estimated historical simulation**, not
+  realized net cash yield. The stress panel shows hypothetical +30/+50/+100%
+  upside shocks, not exchange-specific liquidation prices.
+- 90-day history is accepted **only** if the venue returns all required
+  settlement coverage. An exchange may restrict lookback or public access;
+  this is reported as unavailable, not silently filled from another venue.
+- Server response never contains an account, balance, token, API key,
+  trade instruction, order endpoint or transfer. No real trading or deployment
+  is authorized by this feature.
+
+Offline tests: \`npm run test:funding\`. GitHub Actions also checks type safety,
+Next.js build, existing backend paper-only regression, and public-data smoke.
+New code is in a **stacked Draft PR** on top of the original Funding Lab PR;
+neither should be merged or deployed to production without independent review.

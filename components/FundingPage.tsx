@@ -7,6 +7,7 @@ import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-mode
 import FundingVenueComparison from "@/components/FundingVenueComparison";
 import FundingLocalImport from "@/components/FundingLocalImport";
 import FundingHourlyRisk from "@/components/FundingHourlyRisk";
+import FundingPortfolioReserve from "@/components/FundingPortfolioReserve";
 
 const BLUE = "#58a6ff";
 const GREEN = "#3fb986";
@@ -68,6 +69,7 @@ export default function FundingPage(){
       <FundingVenueComparison />
       <FundingLocalImport />
       <FundingHourlyRisk />
+      <FundingPortfolioReserve />
 
       <section className={PANEL} style={PANEL_STYLE} aria-label="분석 설정">
         <div className="flex flex-wrap items-end justify-between gap-4">

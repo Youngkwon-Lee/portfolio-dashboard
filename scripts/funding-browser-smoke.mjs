@@ -112,9 +112,11 @@ try{
     await page.waitForTimeout(450);
     const bounds=await page.evaluate(()=>{
       const main=document.querySelector("main");
-      const graph=document.querySelector(".recharts-surface");
-      const responsive=document.querySelector(".recharts-responsive-container");
+      // TopBar also contains a small Recharts sparkline (14px on phones).
+      // Never measure the first Recharts SVG globally: scope to Funding Lab.
       const chartElement=document.querySelector('[role="img"][aria-label="펀딩비와 숏·헤지 누적손익 그래프"]');
+      const graph=chartElement?.querySelector(".recharts-surface");
+      const responsive=chartElement?.querySelector(".recharts-responsive-container");
       return {
         viewport:window.innerWidth,
         pageScrollWidth:document.documentElement.scrollWidth,

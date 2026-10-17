@@ -109,7 +109,7 @@ try{
   const run=page.getByRole("button",{name:"공개 데이터로 계산"});
   await run.click();
   await page.getByText("720시간 정산",{exact:false}).waitFor({timeout});
-  await page.getByText("$1.38",{exact:true}).waitFor({timeout});
+  await page.getByText("$1.38",{exact:true}).first().waitFor({timeout});
   assert.ok(await page.getByRole("img",{name:"1배 숏 단독 순손익 그래프"}).isVisible());
   assert.ok(await page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"}).isVisible());
   await labelScreenshot(page);
@@ -187,7 +187,7 @@ try{
       const count=(days*24).toLocaleString("en-US");
       await page.getByText(count+"시간 정산",{exact:false}).waitFor({timeout});
       const expected=coin==="XRP"?"$1.38":coin==="BTC"?"$0.72":"$0.90";
-      await page.getByText(expected,{exact:true}).waitFor({timeout});
+      await page.getByText(expected,{exact:true}).first().waitFor({timeout});
       assert.ok(await page.getByRole("img",{name:"펀딩비와 헤지 순손익 그래프"}).isVisible());
       caseResults.push({coin,days,records:days*24,fixture:true});
     }

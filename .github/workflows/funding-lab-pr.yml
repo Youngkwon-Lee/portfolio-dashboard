@@ -108,3 +108,8 @@ jobs:
           node-version: "22"
       - name: Read-only live market-data completeness audit
         run: node --experimental-strip-types scripts/funding-public-smoke.mjs
+      - name: Read-only OKX 30/90-day hourly spot/perp and margin audit
+        timeout-minutes: 5
+        env:
+          OKX_AUDIT_COIN: XRP
+        run: node --experimental-strip-types scripts/funding-okx-hourly-audit.mjs

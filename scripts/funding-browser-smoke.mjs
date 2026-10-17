@@ -228,10 +228,11 @@ try{
   const fileControl=page.getByLabel("로컬 연구 파일");
   await fileControl.scrollIntoViewIfNeeded({timeout});
   let localUploadRequests=0;
-  const uploadWatch=page.on("request",req=>{
+  const uploadWatch=req=>{
     if(req.method()!=="GET" && !req.url().includes("api.hyperliquid.xyz"))
       localUploadRequests++;
-  });
+  };
+  page.on("request",uploadWatch);
   await fileControl.setInputFiles({
     name:"LOCAL-SYNTHETIC-FIXTURE.json",mimeType:"application/json",
     buffer:Buffer.from(JSON.stringify(localFixture))

@@ -48,7 +48,7 @@ export function evaluateVenue(x:VenueInput):VenueComparison{
     previous=row.time;
     rateSum+=row.rate;
   }
-  if(x.end-previous>maxGap+60000)throw Error("Funding tail missing");
+  if(x.end-previous>=maxGap)throw Error("Funding tail missing");
   const funding=notional*rateSum;
   const limitations=[
     "Funding USD is constant-notional estimate; actual settlement mark/oracle price and position quantity vary.",

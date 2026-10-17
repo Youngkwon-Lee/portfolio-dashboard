@@ -392,3 +392,40 @@ Deterministic mocked API pagination tests are part of
 \`npm run test:funding\`. If the OKX public endpoint is unavailable,
 rate-limited or returns incomplete history, the live audit fails closed and
 no 30/90-day result is asserted. It does not use proxy/geoblock bypass.
+
+
+### OKX public mark-price and current position-tier scenario (Draft, paper only)
+
+An optional \`OKX_MARK_AUDIT=1\` step in the existing non-blocking
+market-data CI job reads three additional official **public GET** sources:
+\`/api/v5/market/history-mark-price-candles\`,
+\`/api/v5/public/position-tiers?instType=SWAP&tdMode=isolated&instFamily=XRP-USDT\`,
+and \`/api/v5/public/instruments?instType=SWAP&instId=XRP-USDT-SWAP\`.
+It does not call any \`/account\`, order, transfer, or private endpoint.
+The public mark history is required to have **all 2,160 consecutive confirmed
+hourly candles**; no missing mark is replaced with the trade price.
+
+\`lib/funding-okx-mark-risk.ts\` uses the *current* public isolated position
+tier snapshot (contract multiplier and contract value included) and a
+**user-assumed liquidation taker fee reserve of 5bps**, and computes an
+isolated 1x short margin-buffer stress from hourly **mark-price highs**,
+before crediting each hour's funding. A breach is only a **possible buffer
+breach**, not a confirmed exchange liquidation.
+
+**Important:** a current tier is NOT proof of the maintenance tiers
+applicable during the prior 30/90 days. OKX's actual fee tier, additional
+liquidation clearance fees, intra-hour mark/funding ordering, tier changes,
+partial reduction/ADL, wallet/cross-margin balances, and true liquidation
+execution are not available. Consequently results are labeled
+\`current_tier_retrospective_scenario_not_historical_tier\` and the output
+always sets \`historical_liquidation_confirmed:false\` and
+\`actual_liquidation_fee_verified:false\`.
+
+If mark history, contract metadata or public tiers cannot be read and
+validated, \`mark_overlay.status\` is \`unavailable\`, with a coarse
+non-sensitive error code. The original 30/90d public funding and trade-OHLC
+audit remains available and **no fallback mark prices or tiers are invented**.
+
+Sources: https://app.okx.com/docs-v5/en/ (mark-price history, public instruments,
+position tiers); https://www.okx.com/en-us/help/liquidation-faq and
+https://www.okx.com/en-us/help/v-tiered-maintenance-margin-ratio-rules .

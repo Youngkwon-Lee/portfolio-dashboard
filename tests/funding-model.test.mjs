@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {HOUR_MS, calculateFundingSimulation} from "../lib/funding-model.ts";
+import {HOUR_MS, calculateFundingSimulation, fundingResultReportable} from "../lib/funding-model.ts";
 
 const START=Date.parse("2026-07-01T00:00:00Z");
 function fixture(opts={}) {
@@ -98,4 +98,15 @@ test("out-of-tolerance timestamps or duplicate aligned hourly settlements fail c
   const duplicate=fixture();
   duplicate.funding[1].time=duplicate.funding[0].time+11;
   assert.throws(()=>calculateFundingSimulation(duplicate),/duplicate/);
+});
+test("liquidation-like intrahour spike invalidates held-to-expiry profit, even when funding looks positive",()=>{
+  const x=fixture({fundingRate:0.0001});
+  x.candles[12].h="210"; // start=100, short 1x collateral=10000, adverse high=210
+  const out=calculateFundingSimulation(x);
+  assert.equal(out.short_collateral_breach_in_proxy,true);
+  assert.ok(out.hedged_net_usd>0); // raw counterfactual must not be exposed as reportable
+  assert.equal(fundingResultReportable(out),false);
+  const ordinary=calculateFundingSimulation(fixture({fundingRate:0.0001}));
+  assert.equal(ordinary.short_collateral_breach_in_proxy,false);
+  assert.equal(fundingResultReportable(ordinary),true);
 });

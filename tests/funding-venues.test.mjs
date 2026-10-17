@@ -9,7 +9,7 @@ function fixture(overrides={}){
  return {venue,coin:"XRP",days,start:START,end,notionalUsd:10000,
   spotFeeBps:10,perpFeeBps:5,slippageBps:5,funding:rows,
   entry:{time:START,spot:99,perp:100},
-  exit:{time:end-HOUR,spot:104,perp:106},...overrides};
+  exit:{time:end,spot:104,perp:106},...overrides};
 }
 test("real observed spot/perp basis change, equal coin units and both legs costs",()=>{
  const result=evaluateVenue(fixture());

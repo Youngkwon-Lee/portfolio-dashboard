@@ -13,7 +13,7 @@ const end=process.env.OKX_AUDIT_END?Date.parse(process.env.OKX_AUDIT_END):Math.f
 if(!Number.isSafeInteger(end)||end%H!==0||end>Date.now()||end<Date.now()-3*DAY)
  throw Error("End must be a recent, completed UTC hour");
 const start90=end-90*DAY;
-const maxRequests=70;let requests=0;
+const maxRequests=80;let requests=0;
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function publicGET(path,params){
  if(++requests>maxRequests)throw Error("Public request cap exceeded");

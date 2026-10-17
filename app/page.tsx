@@ -8,13 +8,14 @@ import AIAnalysisPanel from "@/components/AIAnalysisPanel";
 import TradingPanel from "@/components/TradingPanel";
 import SearchPage from "@/components/SearchPage";
 import BacktestPage from "@/components/BacktestPage";
+import FundingPage from "@/components/FundingPage";
 import SettingsPage from "@/components/SettingsPage";
 import BotPage from "@/components/BotPage";
 import OptimizerPage from "@/components/OptimizerPage";
 import { ShieldCheck, TrendingUp } from "lucide-react";
 
-type Tab = "대시보드" | "종목 검색" | "백테스트" | "최적화" | "자동매매" | "설정";
-const TABS: Tab[] = ["대시보드", "종목 검색", "백테스트", "최적화", "자동매매", "설정"];
+type Tab = "대시보드" | "종목 검색" | "백테스트" | "펀딩비" | "최적화" | "자동매매" | "설정";
+const TABS: Tab[] = ["대시보드", "종목 검색", "백테스트", "펀딩비", "최적화", "자동매매", "설정"];
 
 export default function Dashboard() {
   const [tab, setTab] = useState<Tab>("대시보드");
@@ -40,7 +41,7 @@ export default function Dashboard() {
           </span>
         </div>
 
-        <div className="nav-tabs flex gap-1 text-xs" style={{ color: "var(--muted)" }}>
+        <div className="nav-tabs flex min-w-0 max-w-[58vw] gap-1 overflow-x-auto text-xs" style={{ color: "var(--muted)" }}>
           {TABS.map((t) => (
             <button
               key={t}
@@ -104,6 +105,13 @@ export default function Dashboard() {
         {tab === "백테스트" && (
           <div className="flex-1 overflow-hidden">
             <BacktestPage />
+          </div>
+        )}
+
+        {/* ── 펀딩비 · PAPER ONLY ── */}
+        {tab === "펀딩비" && (
+          <div className="flex-1 min-w-0 overflow-hidden">
+            <FundingPage />
           </div>
         )}
 

@@ -78,7 +78,7 @@ export function evaluateVenue(x:VenueInput):VenueComparison{
     risks:[...risks,"No synchronized spot/perp snapshots: do not interpret funding as hedged net return."]
   };
   const a=x.entry,b=x.exit;
-  if(a.time!==x.start||b.time!==x.end-HOUR)throw Error("Spot/perp snapshots not time-aligned");
+  if(a.time!==x.start||b.time!==x.end)throw Error("Spot/perp snapshots not time-aligned");
   for(const v of [a.spot,a.perp,b.spot,b.perp])bounded(v,1e-8,1e9,"price");
   // Equal coin quantity eliminates directional delta; spot capital is not assumed equal to perp notional.
   const qty=notional/a.perp;

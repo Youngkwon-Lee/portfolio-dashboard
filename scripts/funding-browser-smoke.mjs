@@ -104,18 +104,30 @@ try{
   // Regress 4 layout widths, including narrow phones and tablet.
   for (const widthPx of [320,390,768,1440]) {
     await page.setViewportSize({width:widthPx,height:900});
-    await page.waitForTimeout(240); // wait for Recharts' responsive resize observer
+    await page.waitForTimeout(350); // allow chart resize observer to settle
+    // On 320px screens the results are below an INNER scrolling <main>.
+    // Explicitly scroll the real chart into view before asserting rendering.
+    const chart=page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"});
+    await chart.scrollIntoViewIfNeeded({timeout});
+    await page.waitForTimeout(450);
     const bounds=await page.evaluate(()=>{
       const main=document.querySelector("main");
       const graph=document.querySelector(".recharts-surface");
+      const responsive=document.querySelector(".recharts-responsive-container");
+      const chartElement=document.querySelector('[role="img"][aria-label="펀딩비와 숏·헤지 누적손익 그래프"]');
       return {
         viewport:window.innerWidth,
         pageScrollWidth:document.documentElement.scrollWidth,
         mainClientWidth:main?.clientWidth??0,
         mainScrollWidth:main?.scrollWidth??0,
         chartWidth:graph?.getBoundingClientRect().width??0,
+        responsiveWidth:responsive?.getBoundingClientRect().width??0,
+        chartContainerWidth:chartElement?.getBoundingClientRect().width??0,
+        chartHeight:chartElement?.getBoundingClientRect().height??0,
+        mainScrollTop:main?.scrollTop??0,
       };
     });
+    console.log("FUNDING_RESPONSIVE_CHECK="+JSON.stringify(bounds));
     assert.equal(bounds.viewport,widthPx);
     assert.ok(bounds.pageScrollWidth<=widthPx+2,
       "Document overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));

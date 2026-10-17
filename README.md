@@ -151,6 +151,23 @@ gas, transfer, tax, partial fills, liquidity and true maintenance margin
 are not included. USD values are simulations, not guaranteed KRW cash
 income. Do not treat USDC, FXRP or collateral as KRW safety funds.
 
+### $500 total-capital paper UI (stacked Draft)
+
+The **모의 총자본 (USD)** input defaults to **$500 total**, split evenly into
+**$250 synthetic spot** and **$250 collateral for an isolated 1x short**.
+The `GET /api/funding` `notional` field is **per-leg**, not total capital;
+if omitted, the API defaults to $250 per leg. Thus `notional=10000` in
+the example below is an explicit **$20,000 total** benchmark, **not** the
+$500 UI default. No real asset allocation or order is performed.
+
+The UI separates **gross historical funding**, **round-trip spot/perp fees
+plus both legs' slippage**, and **after-cost synthetic hedge net PnL**.
+It plots funding/hedge PnL separately from directional **1x short PnL**
+using distinct y-axes: curve heights are not cross-chart comparable.
+The initial margin stress percentage is only an intrahour-high proxy,
+not a real exchange liquidation or account margin check. Genuine spot/perp
+basis, collateral movement, FX, tax and off-model costs remain excluded.
+
 ### Example read-only request
 
 ```text

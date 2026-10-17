@@ -6,6 +6,7 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import type { FundingCoin, FundingDays, FundingResult } from "@/lib/funding-model";
 import FundingVenueComparison from "@/components/FundingVenueComparison";
 import FundingLocalImport from "@/components/FundingLocalImport";
+import FundingHourlyRisk from "@/components/FundingHourlyRisk";
 
 const BLUE = "#58a6ff";
 const GREEN = "#3fb986";
@@ -66,6 +67,7 @@ export default function FundingPage(){
 
       <FundingVenueComparison />
       <FundingLocalImport />
+      <FundingHourlyRisk />
 
       <section className={PANEL} style={PANEL_STYLE} aria-label="분석 설정">
         <div className="flex flex-wrap items-end justify-between gap-4">

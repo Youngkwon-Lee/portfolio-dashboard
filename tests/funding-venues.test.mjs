@@ -67,3 +67,9 @@ test("unsupported markets, windows, fees and incomplete tails fail closed",()=>{
  const x=fixture();x.funding.pop();
  assert.throws(()=>evaluateVenue(x),/tail/);
 });
+
+test("Hyperliquid refuses a spurious start-boundary extra settlement",()=>{
+ const x=fixture({venue:"Hyperliquid"});
+ x.funding.unshift({time:START+1000,rate:0.0001});
+ assert.throws(()=>evaluateVenue(x),/count mismatch/);
+});

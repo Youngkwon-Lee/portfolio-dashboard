@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test:funding": "node --experimental-strip-types --test tests/funding-model.test.mjs tests/funding-venues.test.mjs tests/funding-local-import.test.mjs tests/funding-local-converter.test.mjs"
+    "test:funding": "node --experimental-strip-types --test tests/funding-model.test.mjs tests/funding-venues.test.mjs tests/funding-local-import.test.mjs tests/funding-local-converter.test.mjs tests/funding-hourly-risk.test.mjs"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.0",

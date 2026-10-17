@@ -32,8 +32,9 @@ export function parseLocalBundle(text:string):LocalBundle{
     (raw.days!==30&&raw.days!==90))throw Error("Unsupported local bundle");
  const allowed=raw.venue==="Binance"?["https://data.binance.vision/"]:
    ["https://www.bybit.com/","https://public.bybit.com/"];
- if(typeof raw.sourceUrl!=="string"||raw.sourceUrl.length>400||
-    !allowed.some(p=>raw.sourceUrl.startsWith(p)))throw Error("Official source URL required");
+ const sourceUrl=raw.sourceUrl;
+ if(typeof sourceUrl!=="string"||sourceUrl.length>400||
+    !allowed.some(p=>sourceUrl.startsWith(p)))throw Error("Official source URL required");
  if(typeof raw.downloadedAt!=="string"||!/^20\d{2}-\d\d-\d\dT/.test(raw.downloadedAt)||
     !Number.isFinite(Date.parse(raw.downloadedAt)))throw Error("Invalid download timestamp");
  if(!Array.isArray(raw.funding)||!raw.funding.length||raw.funding.length>MAX_ROWS)

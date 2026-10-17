@@ -115,17 +115,19 @@ try{
       // TopBar also contains a small Recharts sparkline (14px on phones).
       // Never measure the first Recharts SVG globally: scope to Funding Lab.
       const chartElement=document.querySelector('[role="img"][aria-label="펀딩비와 숏·헤지 누적손익 그래프"]');
-      const graph=chartElement?.querySelector(".recharts-surface");
       const responsive=chartElement?.querySelector(".recharts-responsive-container");
+      const lineCurves=[...(chartElement?.querySelectorAll("path.recharts-line-curve")??[])]
+        .filter(path=>(path.getAttribute("d")??"").length>10);
       return {
         viewport:window.innerWidth,
         pageScrollWidth:document.documentElement.scrollWidth,
         mainClientWidth:main?.clientWidth??0,
         mainScrollWidth:main?.scrollWidth??0,
-        chartWidth:graph?.getBoundingClientRect().width??0,
         responsiveWidth:responsive?.getBoundingClientRect().width??0,
         chartContainerWidth:chartElement?.getBoundingClientRect().width??0,
         chartHeight:chartElement?.getBoundingClientRect().height??0,
+        renderedCurveCount:lineCurves.length,
+        widestCurve:Math.max(0,...lineCurves.map(path=>path.getBoundingClientRect().width)),
         mainScrollTop:main?.scrollTop??0,
       };
     });
@@ -135,7 +137,10 @@ try{
       "Document overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));
     assert.ok(bounds.mainScrollWidth<=bounds.mainClientWidth+2,
       "Funding page overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));
-    assert.ok(bounds.chartWidth>70,"Responsive chart missing at "+widthPx+"px");
+    assert.ok(bounds.chartContainerWidth>170 && bounds.responsiveWidth>170,
+      "Funding chart container missing at "+widthPx+"px: "+JSON.stringify(bounds));
+    assert.ok(bounds.renderedCurveCount>=3 && bounds.widestCurve>70,
+      "Funding chart data curves not rendered at "+widthPx+"px: "+JSON.stringify(bounds));
     assert.ok(await run.isVisible(),"Analyze button hidden at "+widthPx+"px");
     await page.screenshot({
       path:screenshotDir+"/funding-responsive-"+widthPx+"-MOCK.png",fullPage:true

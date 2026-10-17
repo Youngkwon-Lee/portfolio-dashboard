@@ -5,7 +5,7 @@
  * It also separately checks a genuine read-only public /api/funding request.
  */
 import assert from "node:assert/strict";
-import { mkdir, access } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { chromium } from "playwright-core";
 
@@ -100,22 +100,56 @@ try{
   await page.getByText("$55.24",{exact:true}).waitFor({timeout});
   assert.ok(await page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"}).isVisible());
   await labelScreenshot(page);
-  await page.screenshot({path:screenshotDir+"/funding-desktop-MOCK.png",fullPage:true});
-  await page.setViewportSize({width:390,height:844});
-  await page.screenshot({path:screenshotDir+"/funding-mobile-MOCK.png",fullPage:true});
-  const width=await page.evaluate(()=>({
-    innerWidth:window.innerWidth,
-    scrollWidth:document.documentElement.scrollWidth
-  }));
-  if(width.scrollWidth>width.innerWidth+12) console.warn("MOBILE_OVERFLOW="+JSON.stringify(width));
+  const responsiveChecks=[];
+  // Regress 4 layout widths, including narrow phones and tablet.
+  for (const widthPx of [320,390,768,1440]) {
+    await page.setViewportSize({width:widthPx,height:900});
+    await page.waitForTimeout(240); // wait for Recharts' responsive resize observer
+    const bounds=await page.evaluate(()=>{
+      const main=document.querySelector("main");
+      const graph=document.querySelector(".recharts-surface");
+      return {
+        viewport:window.innerWidth,
+        pageScrollWidth:document.documentElement.scrollWidth,
+        mainClientWidth:main?.clientWidth??0,
+        mainScrollWidth:main?.scrollWidth??0,
+        chartWidth:graph?.getBoundingClientRect().width??0,
+      };
+    });
+    assert.equal(bounds.viewport,widthPx);
+    assert.ok(bounds.pageScrollWidth<=widthPx+2,
+      "Document overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));
+    assert.ok(bounds.mainScrollWidth<=bounds.mainClientWidth+2,
+      "Funding page overflows horizontally at "+widthPx+"px: "+JSON.stringify(bounds));
+    assert.ok(bounds.chartWidth>70,"Responsive chart missing at "+widthPx+"px");
+    assert.ok(await run.isVisible(),"Analyze button hidden at "+widthPx+"px");
+    await page.screenshot({
+      path:screenshotDir+"/funding-responsive-"+widthPx+"-MOCK.png",fullPage:true
+    });
+    responsiveChecks.push(bounds);
+  }
 
-  // State mutations must invalidate results; 90d requests use real UI inputs.
+  // Changing any input must invalidate stale KPI and graph results.
   await page.getByRole("button",{name:"BTC",exact:true}).click();
   assert.equal(await page.getByText("$55.24",{exact:true}).count(),0);
-  await page.getByRole("button",{name:"90일",exact:true}).click();
-  await run.click();
-  await page.getByText("2,160시간 정산",{exact:false}).waitFor({timeout});
-  await page.getByText("$28.77",{exact:true}).waitFor({timeout});
+  // Exercise the real React state + chart for every coin and both windows.
+  // Market responses in this loop are clearly-labeled synthetic E2E fixtures.
+  const caseResults=[];
+  for (const coin of ["XRP","BTC","ETH"]) {
+    await page.getByRole("button",{name:coin,exact:true}).click();
+    for (const days of [30,90]) {
+      await page.getByRole("button",{name:days+"일",exact:true}).click();
+      assert.equal(await page.getByRole("button",{name:coin,exact:true}).getAttribute("aria-pressed"),"true");
+      assert.equal(await page.getByRole("button",{name:days+"일",exact:true}).getAttribute("aria-pressed"),"true");
+      await run.click();
+      const count=(days*24).toLocaleString("en-US");
+      await page.getByText(count+"시간 정산",{exact:false}).waitFor({timeout});
+      const expected=coin==="XRP"?"$55.24":coin==="BTC"?"$28.77":"$35.92";
+      await page.getByText(expected,{exact:true}).waitFor({timeout});
+      assert.ok(await page.getByRole("img",{name:"펀딩비와 숏·헤지 누적손익 그래프"}).isVisible());
+      caseResults.push({coin,days,records:days*24,fixture:true});
+    }
+  }
 
   await page.locator("#fund-notional").fill("0");
   assert.ok(await run.isDisabled(),"Invalid notional should disable analysis");
@@ -125,8 +159,8 @@ try{
   await run.click();
   await page.getByText("검증 불가",{exact:true}).waitFor({timeout});
   await page.getByText("공개 데이터 불완전: 모의 에러 응답").waitFor({timeout});
-  assert.equal(await page.getByText("$28.77",{exact:true}).count(),0);
-  assert.ok(mockedRequests>=3,"Expected valid, alternative, failure browser requests");
+  assert.equal(await page.getByText("$35.92",{exact:true}).count(),0);
+  assert.ok(mockedRequests>=8,"Expected 6 combinations, initial success and failure requests");
   await page.unroute("**/api/funding?**");
   await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
 
@@ -158,10 +192,11 @@ try{
   await page.waitForTimeout(250);
   await page.screenshot({path:screenshotDir+"/funding-mobile-LIVE-PUBLIC-results.png",fullPage:true});
   console.log("FUNDING_UI_SMOKE_OK "+JSON.stringify({
-    browser:"headless Chrome",screenshots:5,fixtures:mockedRequests,
+    browser:"headless Chrome",screenshots:7,fixtures:mockedRequests,
+    mock_ui_cases:caseResults,responsive_checks:responsiveChecks,
     verified_live_exchange_hours:live.hourly_settlements,
     live_coin:live.coin,live_days:live.days,execution_mode:live.execution_mode,
-    live_hedged_net_usd:live.hedged_net_usd,mobile_overflow:width
+    live_hedged_net_usd:live.hedged_net_usd
   }));
 }catch(e){
   console.error("FUNDING_UI_SMOKE_FAILED "+String(e));

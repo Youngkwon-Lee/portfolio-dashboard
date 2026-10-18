@@ -69,6 +69,28 @@ jobs:
           done
           if [ "$READY" -ne 1 ]; then cat "$RUNNER_TEMP/funding-next.log"; exit 1; fi
           node scripts/funding-browser-smoke.mjs
+      - name: Funding HTTP 422 and 429 integration (isolated synthetic upstream)
+        env:
+          CI: "true"
+          FUNDING_GUARD_HTTP_URL: http://127.0.0.1:3101
+        run: |
+          set -euo pipefail
+          FUNDING_ROUTE_FIXTURE_MODE=offline-422 \
+          NODE_OPTIONS="--require=$(pwd)/scripts/funding-route-422-preload.cjs" \
+          node node_modules/next/dist/bin/next start -p 3101 > "$RUNNER_TEMP/funding-route-guard.log" 2>&1 &
+          TEST_PID=$!
+          trap 'kill "$TEST_PID" 2>/dev/null || true' EXIT
+          READY=0
+          for i in $(seq 1 60); do
+            if curl --fail --silent --output /dev/null "$FUNDING_GUARD_HTTP_URL"; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then cat "$RUNNER_TEMP/funding-route-guard.log"; exit 1; fi
+          node scripts/funding-route-422-http.mjs
+          if ! grep -q FUNDING_ROUTE_TEST_UPSTREAM_INTERCEPTED "$RUNNER_TEMP/funding-route-guard.log"; then
+            echo "The isolated exchange fixture was not used"; exit 1
+          fi
+
       - name: Upload Funding Lab browser screenshots
         if: always()
         uses: actions/upload-artifact@v4

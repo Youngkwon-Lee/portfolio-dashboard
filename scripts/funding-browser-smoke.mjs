@@ -288,8 +288,65 @@ try{
   assert.equal(riskNonGet,0,"Hourly breach file generated a network write");
   page.removeListener("request",riskListener);
   await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
+  // Private KRW reserve UI: synthetic local-only data, NEVER personal assets.
+  // Confirm HOLD when bank cash falls short despite large exchange holdings.
+  await page.setViewportSize({width:390,height:844});
+  const reservePanel=page.getByRole("region",{name:"생활비 안전자금과 크립토 투자 한도"});
+  const reserveInput=page.getByLabel("포트폴리오 로컬 파일");
+  await reserveInput.scrollIntoViewIfNeeded({timeout});
+  const sampleReserve={
+    snapshotDate:"2026-10-17T05:00:00Z",
+    krwBankCash:1_000_000,krwBankDepositsAvailableWithin2Days:0,
+    essentialMonthlyKrw:2_000_000,reserveMonths:12,
+    nearTermObligationsKrw:1_000_000,fundingAllocationCapPct:10,
+    holdings:[
+      {asset:"XRP",venue:"Fixture A",category:"crypto",valueKrw:10_000_000,availableInDays:1,encumbered:false},
+      {asset:"USDT",venue:"Fixture B",category:"stablecoin",valueKrw:5_000_000,availableInDays:1,encumbered:false},
+      {asset:"ETH",venue:"Fixture C",category:"defi",valueKrw:7_000_000,availableInDays:7,encumbered:true}
+    ]
+  };
+  let reserveWriteRequests=0;
+  const watchReserve=req=>{if(req.method()!=="GET")reserveWriteRequests++;};
+  page.on("request",watchReserve);
+  await reserveInput.setInputFiles({
+    name:"SYNTHETIC-UNFUNDED-KRW.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify(sampleReserve))
+  });
+  await reservePanel.getByText("사용자 제공 미검증 자료 · PAPER ONLY").waitFor({timeout});
+  await reservePanel.getByText("원화 생활비 안전자금이 부족합니다.",{exact:false}).waitFor({timeout});
+  await reservePanel.getByText("₩24,000,000",{exact:true}).waitFor({timeout});
+  assert.equal(reserveWriteRequests,0,"Private reserve file attempted network write");
+  await labelScreenshot(page);
+  await reserveInput.scrollIntoViewIfNeeded({timeout});
+  await page.screenshot({
+    path:screenshotDir+"/funding-reserve-HOLD-SYNTHETIC-MOCK.png",fullPage:true
+  });
+  await reserveInput.setInputFiles({
+    name:"SYNTHETIC-FUNDED-KRW.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify({...sampleReserve,krwBankCash:26_000_000}))
+  });
+  await reservePanel.getByText("입력한 안전자금 목표는 충족됐습니다.",{exact:false}).waitFor({timeout});
+  await reservePanel.getByText("₩1,500,000",{exact:true}).waitFor({timeout});
+  assert.equal(await reservePanel.getByText("원화 생활비 안전자금이 부족합니다.",{exact:false}).count(),0);
+  assert.equal(reserveWriteRequests,0,"Covered reserve file attempted network write");
+  await reserveInput.scrollIntoViewIfNeeded({timeout});
+  await page.screenshot({
+    path:screenshotDir+"/funding-reserve-COVERED-SYNTHETIC-MOCK.png",fullPage:true
+  });
+  await reserveInput.setInputFiles({
+    name:"SYNTHETIC-REJECTED-CREDENTIAL.json",mimeType:"application/json",
+    buffer:Buffer.from(JSON.stringify({...sampleReserve,apiKey:"fixture-not-a-real-key"}))
+  });
+  await reservePanel.getByText("파일 검증 실패:",{exact:false}).waitFor({timeout});
+  assert.equal(await reservePanel.getByText("사용자 제공 미검증 자료 · PAPER ONLY").count(),0,
+    "Private input failure displayed stale allocation");
+  assert.equal(reserveWriteRequests,0,"Invalid reserve file attempted network write");
+  page.removeListener("request",watchReserve);
+  await page.evaluate(()=>document.getElementById("funding-browser-fixture-watermark")?.remove());
   console.log("FUNDING_UI_SMOKE_OK "+JSON.stringify({
-    browser:"headless Chrome",screenshots:9,fixtures:mockedRequests,
+    browser:"headless Chrome",screenshots:11,fixtures:mockedRequests,
+    reserve_hold_synthetic:true,reserve_covered_synthetic:true,
+    reserve_sensitive_field_rejected:true,reserve_upload_requests:reserveWriteRequests,
     hourly_synthetic_file:true,hourly_breach_suppressed:true,hourly_upload_requests:riskNonGet,
     local_file_synthetic_fixture:true,local_file_invalid_rejected:true,local_upload_requests:localUploadRequests,
     mock_ui_cases:caseResults,responsive_checks:responsiveChecks,

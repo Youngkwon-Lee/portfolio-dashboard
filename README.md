@@ -281,3 +281,114 @@ The JSON is analyzed only in browser memory; the output is visibly marked
 \`user_supplied_unverified\` and is not combined into the verified live
 exchange ranking. It is **not** a validated investment return. No file,
 credentials, or personal balances are sent to Quant Lab servers.
+
+
+### Hourly path and isolated-margin stress (stacked Draft, PAPER ONLY)
+
+The Funding Lab includes an additional **시간별 베이시스 · 1배 숏 증거금 경로**
+panel. This research feature is **not** an exchange liquidation engine and does
+not place orders, query accounts, transmit selected files or modify balances.
+
+To use it, supply an independently authorized and verified source of
+synchronized hourly spot and perpetual OHLC candles and actual funding
+settlements for exactly **720 (30d)** or **2160 (90d)** contiguous UTC hours.
+The **user-supplied** bundle has these keys:
+
+\`\`\`json
+{
+  "format": "quant-lab-hourly-path-v1",
+  "venue": "OKX",
+  "coin": "XRP",
+  "days": 30,
+  "start": 1789617600000,
+  "end": 1792209600000,
+  "notionalUsd": 10000,
+  "sourceUrl": "https://www.okx.com/",
+  "funding": [{"time": 1789646400000, "rate": 0.0001}],
+  "candles": [
+    {"time":1789617600000,
+     "spot":{"open":1,"high":1.01,"low":0.99,"close":1},
+     "perp":{"open":1,"high":1.02,"low":0.98,"close":1}}
+  ]
+}
+\`\`\`
+
+**The snippet above is deliberately incomplete and MUST be rejected.** Full
+data must include each UTC hour in the requested window, with correct
+high/low and open/close. \`funding\` contains **observed** exchange
+settlements; the model validates settlement continuity through the existing
+venue-specific engine. Historical data from other tokens, wrapped FXRP or
+different instruments must not be silently substituted.
+
+A local offline converter can create this JSON from independently normalized
+CSV inputs:
+
+\`\`\`bash
+node scripts/funding-build-hourly-path.mjs OKX XRP 30 \
+  2026-09-17T04:00:00Z spot.csv perp.csv funding.csv \
+  https://www.okx.com/ ./hourly-research.json
+\`\`\`
+
+Both spot and perp CSV files require exactly
+\`time,open,high,low,close\` with **millisecond UTC** timestamps; funding
+requires \`time,rate\`. The converter never downloads or uploads data.
+It refuses to overwrite an existing output file. A source URL is a user claim,
+not authenticated provenance; a SHA256 digest proves file integrity, not origin.
+
+Model behavior:
+- Same-quantity spot and isolated 1x short, **separate** spot capital and
+  short collateral. The model uses observed spot/perp closes and historical
+  signed funding rates to estimate daily basis, funding and net equity.
+- The assumed maintenance margin rate is configurable **0–10%** and is
+  **not** automatically derived from exchange-specific leverage brackets,
+  risk tiers, fee/liquidation rules or cross/portfolio margin.
+- For short risk, each hourly **perpetual high** is tested *before* that
+  hour's funding is credited. This is a conservative stress proxy; OHLC does
+  not reveal intrahour ordering, synchronized spot/perp extremes, true
+  liquidation fills or funding mark/oracle prices.
+- If any hour crosses the assumed maintenance margin buffer, the model
+  marks a **possible breach** and suppresses the entire held-to-end return,
+  rather than assuming the position survived. A positive buffer does **not**
+  prove a trade would avoid liquidation.
+- Real trade P&L, maximum possible loss, intrahour realized drawdown,
+  maintenance tier transitions, financing, ADL, transfer latency, order
+  book depth, stablecoin/FXRP risk, tax and KRW conversion are **not** verified.
+- Browser File API parses the JSON entirely in memory and never sends it to
+  the Quant Lab server. Results are labeled \`user_supplied_unverified\`.
+
+Run offline regression with \`npm run test:funding\`. No live trading or
+production deployment is authorized by this feature.
+
+
+### OKX official public historical audit (read-only; non-blocking)
+
+\`scripts/funding-okx-hourly-audit.mjs\` retrieves public **XRP-USDT spot**
+and **XRP-USDT-SWAP** confirmed hourly OHLC candles plus **realized funding
+settlements** using only documented OKX public GET endpoints:
+
+- \`/api/v5/market/history-candles\` (100 rows/page; \`after\` means older)
+- \`/api/v5/public/funding-rate-history\` (100 rows/page; \`after\` means older)
+
+The bounded script checks **2160 consecutive closed hours**, validates funding
+continuity, and produces **separate 30/90-day summaries** using the same UTC
+end boundary. It runs in the existing non-blocking CI market-data job, without
+creating a new runner. Maximum 70 public requests, 12s timeout per request,
+100ms pacing, no credentials, wallet, trades, writes, or private data.
+
+\`\`\`bash
+OKX_AUDIT_COIN=XRP node --experimental-strip-types scripts/funding-okx-hourly-audit.mjs
+\`\`\`
+
+The printed \`OKX_HOURLY_AUDIT_RESULT\` includes a SHA256 hash of its JSON
+summary, number of calls, source, time window, margin-buffer breach proxy,
+and null net return if any assumed buffer breach occurs. **The summary
+does not prove that hourly OHLC extremes were executable, the funding
+mark/oracle was the candle close, the position could be maintained, or that
+actual exchange liquidation tiers were modeled.** It is a retrospective
+research stress proxy. The output is never merged into account balances,
+automatic trading, or cash-flow projections.
+
+Deterministic mocked API pagination tests are part of
+\`npm run test:funding\`. If the OKX public endpoint is unavailable,
+rate-limited or returns incomplete history, the live audit fails closed and
+no 30/90-day result is asserted. It does not use proxy/geoblock bypass.

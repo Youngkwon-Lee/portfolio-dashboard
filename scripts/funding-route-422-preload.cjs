@@ -6,6 +6,10 @@ if (typeof originalFetch!=="function") throw Error("Node fetch unavailable");
 let intercepted=0;
 globalThis.fetch=async function fundingRouteFixture(url,init){
   const href=typeof url==="string"?url:url instanceof URL?url.href:url?.url;
+  // Other venues must not call the Internet during the isolated CI run.
+  if(typeof href==="string" && /https:\/\/(?:fapi\.binance\.com|api\.binance\.com|api\.bybit\.com|www\.okx\.com)\//.test(href)){
+    return new Response(JSON.stringify({error:"synthetic upstream intentionally unavailable"}),{status:503,headers:{"content-type":"application/json"}});
+  }
   if (href!=="https://api.hyperliquid.xyz/info") return originalFetch.call(this,url,init);
   if (!init||init.method!=="POST"||typeof init.body!=="string") throw Error("Unexpected public info request");
   const body=JSON.parse(init.body);

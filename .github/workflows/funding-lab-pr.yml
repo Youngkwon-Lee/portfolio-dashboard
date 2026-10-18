@@ -134,4 +134,5 @@ jobs:
         timeout-minutes: 5
         env:
           OKX_AUDIT_COIN: XRP
+          OKX_MARK_AUDIT: "1"
         run: node --experimental-strip-types scripts/funding-okx-hourly-audit.mjs

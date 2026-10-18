@@ -2,10 +2,14 @@
 import {NextRequest,NextResponse} from "next/server";
 import {evaluateVenue,type Venue,type Asset,type Settlement,type SpotPerpSnapshot} from "@/lib/funding-venues";
 import {normalizeSettlementHour} from "@/lib/funding-model";
+import {createFundingRequestGuard} from "@/lib/funding-request-guard";
 export const runtime="nodejs";
 export const dynamic="force-dynamic";
 export const maxDuration=60;
 const HOUR=3600000;
+// The venue endpoint fans out to four upstream providers. This conservative
+// budget is per warm Function process, not distributed; WAF is still required.
+const venueRequestGuard=createFundingRequestGuard({maxRequests:3,windowMs:60_000,maxConcurrent:1});
 const providers:Venue[]=["Hyperliquid","Binance","Bybit","OKX"];
 const coinList:Asset[]=["BTC","ETH","XRP"];
 const fees={spot:10,perp:5,slippage:5};
@@ -187,12 +191,21 @@ export async function GET(req:NextRequest){
     notional===null||spotFee===null||perpFee===null||slippage===null)
     return NextResponse.json({error:"유효 범위: BTC/ETH/XRP, 30·90일, $100–$1m, 0–100bps"},{status:400});
   const end=Math.floor(Date.now()/HOUR)*HOUR,start=end-days*86400000;
-  const results=await Promise.all(providers.map(v=>venueResult(v,coin as Asset,days as 30|90,start,end,
-    notional,spotFee,perpFee,slippage)));
-  return NextResponse.json({
-    execution_mode:"paper",live_allowed:false,coin,days,start_utc:new Date(start).toISOString(),
-    end_utc:new Date(end).toISOString(),notional_usd:notional,
-    venue_results:results,
-    warning:"과거 펀딩비 및 동시간대 캔들 시가 기반 모의 계산. 실현손익·원화 생활비·청산 가격 아님."
-  },{headers:{"Cache-Control":"public, s-maxage=300, stale-while-revalidate=60"}});
+  const admission=venueRequestGuard.acquire();
+  if(!admission.allowed){
+    return NextResponse.json({
+      execution_mode:"paper",live_allowed:false,
+      error:"4개 거래소 공개 데이터 조회가 많습니다. 잠시 후 다시 시도하세요."
+    },{status:429,headers:{"Cache-Control":"no-store","Retry-After":String(admission.retryAfterSeconds)}});
+  }
+  try{
+    const results=await Promise.all(providers.map(v=>venueResult(v,coin as Asset,days as 30|90,start,end,
+      notional,spotFee,perpFee,slippage)));
+    return NextResponse.json({
+      execution_mode:"paper",live_allowed:false,coin,days,start_utc:new Date(start).toISOString(),
+      end_utc:new Date(end).toISOString(),notional_usd:notional,
+      venue_results:results,
+      warning:"과거 펀딩비 및 동시간대 캔들 시가 기반 모의 계산. 실현손익·원화 생활비·청산 가격 아님."
+    },{headers:{"Cache-Control":"public, s-maxage=300, stale-while-revalidate=60"}});
+  }finally{admission.release();}
 }

@@ -3,6 +3,7 @@
  * trade permissions, order execution, deposits or withdrawals.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { fundingPublicRequestGuard } from "@/lib/funding-request-guard";
 import {
   calculateFundingSimulation, fundingResultReportable, DAY_MS, HOUR_MS,
   normalizeSettlementHour, FUNDING_SETTLEMENT_TOLERANCE_MS,
@@ -78,6 +79,15 @@ export async function GET(req:NextRequest){
   }
   const end=Math.floor(Date.now()/HOUR_MS)*HOUR_MS;
   const start=end-days*DAY_MS;
+  const admission=fundingPublicRequestGuard.acquire();
+  if(!admission.allowed){
+    return NextResponse.json({
+      error:admission.reason==="busy"
+        ?"공개 데이터 동시 조회가 많습니다. 잠시 후 다시 시도하세요."
+        :"공개 데이터 조회 횟수가 많습니다. 잠시 후 다시 시도하세요.",
+      execution_mode:"paper",live_allowed:false
+    },{status:429,headers:{"Retry-After":String(admission.retryAfterSeconds),"Cache-Control":"no-store"}});
+  }
   try{
     const [funding,candles]=await Promise.all([
       fetchFunding(coin as FundingCoin,start,end),
@@ -105,5 +115,7 @@ export async function GET(req:NextRequest){
       error:"시간별 펀딩비·가격 자료를 완전하게 확인하지 못했습니다. 추정 수익률을 표시하지 않습니다.",
       execution_mode:"paper",live_allowed:false
     },{status:503,headers:{"Cache-Control":"no-store"}});
+  } finally {
+    admission.release();
   }
 }

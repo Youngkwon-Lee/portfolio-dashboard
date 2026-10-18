@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {HOUR_MS, calculateFundingSimulation, fundingResultReportable} from "../lib/funding-model.ts";
+import {createFundingRequestGuard} from "../lib/funding-request-guard.ts";
 
 const START=Date.parse("2026-07-01T00:00:00Z");
 function fixture(opts={}) {
@@ -109,4 +110,27 @@ test("liquidation-like intrahour spike invalidates held-to-expiry profit, even w
   const ordinary=calculateFundingSimulation(fixture({fundingRate:0.0001}));
   assert.equal(ordinary.short_collateral_breach_in_proxy,false);
   assert.equal(fundingResultReportable(ordinary),true);
+});
+test("per-process request window rejects calls and resets without permanent blocks",()=>{
+  let now=1000;
+  const g=createFundingRequestGuard({maxRequests:2,maxConcurrent:1,windowMs:10_000,clock:()=>now});
+  const first=g.acquire();assert.equal(first.allowed,true);
+  assert.deepEqual(g.acquire(),{allowed:false,reason:"busy",retryAfterSeconds:1});
+  if(first.allowed){first.release();first.release();}
+  const second=g.acquire();assert.equal(second.allowed,true);
+  if(second.allowed)second.release();
+  assert.deepEqual(g.acquire(),{allowed:false,reason:"rate_limit",retryAfterSeconds:10});
+  now+=10_001;
+  const next=g.acquire();assert.equal(next.allowed,true);
+  if(next.allowed)next.release();
+});
+test("concurrency rejection does not consume fixed-window allowance",()=>{
+  const g=createFundingRequestGuard({maxRequests:5,maxConcurrent:2,clock:()=>5000});
+  const a=g.acquire(),b=g.acquire();assert.equal(a.allowed,true);assert.equal(b.allowed,true);
+  assert.deepEqual(g.acquire(),{allowed:false,reason:"busy",retryAfterSeconds:1});
+  if(a.allowed)a.release();
+  const c=g.acquire();assert.equal(c.allowed,true);
+  if(b.allowed)b.release();
+  if(c.allowed)c.release();
+  assert.throws(()=>createFundingRequestGuard({maxRequests:0}),/Invalid funding request budget/);
 });

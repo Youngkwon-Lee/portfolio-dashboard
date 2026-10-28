@@ -87,6 +87,14 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 
 `POST /api/optimize`도 같은 백엔드 시장 데이터 게이트를 따릅니다. 기본값에서는 외부 가격을 읽지 않고 403을 반환하며, 명시적으로 `PAPER_EXTERNAL_MARKET_READS=true`를 주입한 paper 환경에서만 Markowitz·최소 변동성·리스크 패리티·동일 가중 결과를 계산합니다. 응답에는 `methodology.reproducible`, 고정 seed, `execution_mode: "paper"`, `live_allowed: false`가 포함되고 결과는 주문·계좌에 연결되지 않습니다.
 
+## Shadow research lab
+
+`연구실` 탭은 TradingView 공식 MCP와 Jev 연결을 위한 별도 shadow 연구 흐름입니다. 현재 M1/M2 경로는 fixture → 정규화·품질검증 → 기존 전략 신호 → mock JeV → 별도 연구 SQLite → API/UI 조회까지 재현하며, paper 주문·체결 원장·kill switch에는 연결되지 않습니다. fixture 결과는 `FIXTURE / DEMO`로 표시되고 live 검증 결과로 해석하면 안 됩니다.
+
+TradingView MCP 유료 플랜 없이도 `YAHOO / PUBLIC` source를 명시해 기존 yfinance 기반 무료 공개 데이터를 연구 snapshot으로 사용할 수 있습니다. 이는 TradingView 데이터가 아니며 provider·지연·사용권이 별도로 표시됩니다.
+
+연구 저장소는 `RESEARCH_DB_PATH`로 분리할 수 있습니다. TradingView OAuth 2.1 access token은 `TRADINGVIEW_MCP_ACCESS_TOKEN`, Jev API key는 `TYPESAFE_API_KEY`로 백엔드 runtime secret에 주입합니다. 두 인증은 Codex MCP 로그인, `PAPER_OPERATOR_TOKEN`, `OPENAI_API_KEY`와 자동 공유하지 않습니다. provider adapter는 공식 tool/response schema와 bar completeness를 검증하기 전까지 live 상태를 `configured_unverified`로 표시하고, 실패 시 외부 fallback 없이 `deferred`로 기록합니다.
+
 `/api/order`, `/api/balance`, `/api/upbit/balance`, `/api/wallet/binance`는 현재 항상 차단됩니다. 실거래 활성화는 환경 변수 하나로 열 수 있는 기능이 아니며 별도의 법무·보안 설계와 승인 없이는 지원하지 않습니다.
 
 시장·지갑 provider 장애는 502와 일반화된 오류만 반환하며 내부 예외나 인증 정보는 응답에 반영하지 않습니다.

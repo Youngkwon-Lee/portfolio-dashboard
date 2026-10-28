@@ -29,6 +29,7 @@ import database as db
 import optimizer as opt
 import news_sentiment as news
 import upbit_client as upbit
+import research_workflow as research
 from trading_safety import LIVE_BLOCK_REASON, SafetyViolation
 from contextlib import asynccontextmanager
 
@@ -53,6 +54,7 @@ API_MAX_REQUEST_BODY_BYTES = 1_048_576
 API_MAX_CONCURRENT_REQUESTS = 100
 _api_request_times: dict[str, deque[float]] = {}
 _api_concurrency = asyncio.Semaphore(API_MAX_CONCURRENT_REQUESTS)
+research_store = research.ResearchStore()
 
 
 def require_operator(
@@ -135,6 +137,7 @@ WALLET_DATA_ERROR = "지갑 데이터 조회 실패"
 @asynccontextmanager
 async def lifespan(application):
     await db.init_db()
+    await research_store.init()
     yield
 
 app = FastAPI(
@@ -258,6 +261,107 @@ async def health():
 async def ping():
     """Render 슬립 방지용 핑 엔드포인트."""
     return "pong"
+
+
+# ──────────────────────────────────────────────
+# Shadow research (TradingView + JeV)
+# ──────────────────────────────────────────────
+
+
+class ResearchRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(..., min_length=1, max_length=20, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$")
+    exchange: str = Field("KRX", min_length=1, max_length=20, pattern=r"^[A-Za-z0-9_-]{1,20}$")
+    interval: Literal["1D"] = "1D"
+    source: Literal["fixture", "yahoo_public", "tradingview"] = "fixture"
+    strategy: str = "sma_cross"
+    decision_provider: Literal["mock", "jev"] = "mock"
+    request_key: str | None = Field(default=None, max_length=160, pattern=r"^[A-Za-z0-9:_./-]{1,160}$")
+
+
+@app.get("/api/research/status")
+async def research_status():
+    return {
+        **research.connection_status(),
+        "execution_mode": "paper",
+        "live_allowed": False,
+    }
+
+
+@app.get("/api/research/instruments")
+async def research_instruments(
+    query: str = Query("", max_length=80),
+    source: Literal["fixture", "yahoo_public", "tradingview"] = "fixture",
+):
+    provider = (
+        research.FixtureMarketDataProvider()
+        if source == "fixture"
+        else research.PublicYahooMarketDataProvider()
+        if source == "yahoo_public"
+        else (
+            research.TradingViewMcpProvider()
+            if research.connection_status()["tradingview"]["configured"]
+            else research.UnconfiguredTradingViewProvider()
+        )
+    )
+    try:
+        return {
+            "source": source,
+            "live_verified": False,
+            "instruments": await provider.search(query),
+        }
+    except research.ResearchProviderError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": str(exc)}) from exc
+
+
+@app.post("/api/research/runs")
+async def create_research_run(
+    payload: ResearchRunRequest,
+    _: None = Depends(require_operator),
+):
+    if payload.strategy not in research.SUPPORTED_STRATEGIES:
+        raise HTTPException(status_code=400, detail="지원하지 않는 전략입니다.")
+    decision_provider = (
+        research.MockJevDecisionProvider()
+        if payload.decision_provider == "mock"
+        else (
+            research.TypeSafeJevDecisionProvider()
+            if research.connection_status()["jev"]["configured"]
+            else research.UnconfiguredJevDecisionProvider()
+        )
+    )
+    market_provider = (
+        research.FixtureMarketDataProvider()
+        if payload.source == "fixture"
+        else research.PublicYahooMarketDataProvider()
+        if payload.source == "yahoo_public"
+        else (
+            research.TradingViewMcpProvider()
+            if research.connection_status()["tradingview"]["configured"]
+            else research.UnconfiguredTradingViewProvider()
+        )
+    )
+    result = await research.run_research(
+        payload.model_dump(),
+        store=research_store,
+        market_provider=market_provider,
+        decision_provider=decision_provider,
+    )
+    return result
+
+
+@app.get("/api/research/runs")
+async def list_research_runs(limit: int = Query(20, ge=1, le=100)):
+    return {"runs": await research_store.list(limit)}
+
+
+@app.get("/api/research/runs/{run_id}")
+async def get_research_run(run_id: str):
+    result = await research_store.get(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="연구 실행 기록을 찾을 수 없습니다.")
+    return result
 
 
 # ──────────────────────────────────────────────

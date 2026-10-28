@@ -19,6 +19,7 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 - `database.py`: paper 체결·상태 SQLite 저장소
 - `paper_soak_runner.py`: 외부 연결을 차단한 24시간 wall-clock 안전 soak
 - `backtest_engine.py`: 과거 데이터 백테스트 엔진
+- `research_workflow.py`: paper 원장과 분리된 shadow 스냅샷·전략 신호·JeV-shaped 판단 기록 흐름
 - `tests/`: 네트워크·실계좌 호출 없는 안전 회귀 및 가속 soak 테스트
 
 `PORTFOLIO_DB_PATH`와 `TRADING_SAFETY_STATE_PATH`로 테스트 저장 위치를 분리할 수 있습니다. 기본 `portfolio.db`는 사용자 데이터이므로 검증 작업에서 삭제·초기화·되돌리지 마세요.
@@ -37,6 +38,31 @@ uv run --with-requirements requirements.txt uvicorn main:app --reload --port 800
 | POST | `/api/order` | `403` 차단 |
 | GET | `/api/upbit/balance` | `403` 차단 |
 | GET/POST | `/api/wallet/binance` | `403` 차단 |
+
+## Shadow research
+
+연구실 탭은 기본적으로 deterministic fixture와 mock JeV를 사용합니다. 결과는 `RESEARCH_DB_PATH`로 지정할 수 있는 별도 SQLite에 저장되며 `portfolio.db`의 paper 체결 원장과 섞이지 않습니다.
+
+| Method | Path | 상태 |
+| --- | --- | --- |
+| GET | `/api/research/status` | shadow 모드와 backend 인증 설정 상태만 반환; 비밀 값은 반환하지 않음 |
+| GET | `/api/research/instruments` | fixture 또는 Yahoo public 종목 검색 |
+| POST | `/api/research/runs` | fixture/mock, Yahoo public/mock, 또는 미구성 live 요청의 보류 기록 |
+| GET | `/api/research/runs` | 최근 연구 실행 목록 |
+| GET | `/api/research/runs/{run_id}` | 저장 당시 snapshot·signal·decision 상세 |
+
+TradingView MCP와 Jev 자격 증명은 Codex MCP 세션이나 `PAPER_OPERATOR_TOKEN`과 공유하지 않습니다. 백엔드 전용 runtime secret 이름은 `TRADINGVIEW_MCP_ACCESS_TOKEN`(공식 OAuth 2.1로 발급된 access token), 선택적 `TRADINGVIEW_MCP_URL`, `TYPESAFE_API_KEY`(호환 별칭 `JEV_API_KEY`), 선택적 `JEV_API_URL`, `JEV_MODEL`입니다. 토큰이 있어도 실제 tool 응답·bar completeness·Jev schema 검증 전에는 상태가 `configured_unverified`이며, live provider 실패는 외부 fallback 없이 `deferred`로 닫힙니다. fixture 응답은 화면에서 `FIXTURE / DEMO`로 표시됩니다.
+
+M0 read-only 검증은 저장소 루트에서 실행합니다. secret 값은 채팅이나 로그에 붙여넣지 말고 backend runtime에만 주입하세요.
+
+```bash
+cd backend
+uv run --with-requirements requirements.txt python research_m0_probe.py --query AAPL
+```
+
+자격 증명이 없으면 probe는 외부 호출 없이 종료 코드 `2`와 누락된 환경 변수 이름만 출력합니다. 두 provider가 모두 성공하고 snapshot 품질이 통과한 경우에만 Jev 요청을 이어서 보내며, 결과에는 토큰이 포함되지 않습니다.
+
+무료 경로인 `yahoo_public`은 기존 yfinance wrapper를 재사용합니다. 주식과 함께 `BTC-USD`, `ETH-USD`, `SOL-USD`, `BNB-USD`, `XRP-USD`, `ADA-USD`, `DOGE-USD`를 지원합니다. 이는 TradingView MCP와 다른 데이터 출처이며, 화면에 `YAHOO / PUBLIC`으로 표시하고 지연·사용권·bar completeness를 별도로 검증합니다.
 
 ## 안전 테스트
 

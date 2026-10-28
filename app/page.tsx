@@ -11,10 +11,11 @@ import BacktestPage from "@/components/BacktestPage";
 import SettingsPage from "@/components/SettingsPage";
 import BotPage from "@/components/BotPage";
 import OptimizerPage from "@/components/OptimizerPage";
+import ResearchPage from "@/components/ResearchPage";
 import { ShieldCheck, TrendingUp } from "lucide-react";
 
-type Tab = "대시보드" | "종목 검색" | "백테스트" | "최적화" | "자동매매" | "설정";
-const TABS: Tab[] = ["대시보드", "종목 검색", "백테스트", "최적화", "자동매매", "설정"];
+type Tab = "대시보드" | "종목 검색" | "연구실" | "백테스트" | "최적화" | "자동매매" | "설정";
+const TABS: Tab[] = ["대시보드", "종목 검색", "연구실", "백테스트", "최적화", "자동매매", "설정"];
 
 export default function Dashboard() {
   const [tab, setTab] = useState<Tab>("대시보드");
@@ -97,6 +98,13 @@ export default function Dashboard() {
         {tab === "종목 검색" && (
           <div className="flex-1 overflow-hidden">
             <SearchPage />
+          </div>
+        )}
+
+        {/* ── 연구실 ── */}
+        {tab === "연구실" && (
+          <div className="flex-1 overflow-hidden">
+            <ResearchPage />
           </div>
         )}
 

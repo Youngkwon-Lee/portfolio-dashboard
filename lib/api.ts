@@ -14,6 +14,12 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function fetchMarket<T>(params: Record<string, string>): Promise<T> {
+  const response = await fetch(`/api/market?${new URLSearchParams(params)}`, { method: "GET", credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new Error("Market data unavailable");
+  return response.json();
+}
+
 // ── 마켓 감지 ─────────────────────────────────
 
 export type Market = "KRX" | "US" | "CRYPTO" | "ETF";
@@ -25,13 +31,23 @@ export function detectMarket(ticker: string): Market {
   const t = ticker.toUpperCase();
   if (CRYPTO_SET.has(t))           return "CRYPTO";
   if (ETF_SET.has(t))              return "ETF";
-  if (/^\d{6}$/.test(t))           return "KRX";
+  if (/^\d{6}(?:\.(?:KS|KQ))?$/.test(t))           return "KRX";
   return "US";
 }
 
 // ── 타입 ──────────────────────────────────────
 
-export interface StockPrice {
+export interface MarketMetadata {
+  source?: string;
+  providerSymbol?: string;
+  currency?: string;
+  as_of?: string;
+  fetched_at?: string;
+  exchange_timezone?: string;
+  delayed?: boolean;
+}
+
+export interface StockPrice extends MarketMetadata {
   ticker: string;
   name: string;
   current_price: number;
@@ -54,7 +70,10 @@ export interface Candle {
   volume: number;
 }
 
-export interface ChartResponse {
+export interface ChartResponse extends MarketMetadata {
+  covered_from?: string;
+  covered_to?: string;
+  coverage_note?: string;
   ticker: string;
   market: string;
   period: string;
@@ -93,7 +112,7 @@ export interface OrderResult {
   message: string;
 }
 
-export interface IndexPrice {
+export interface IndexPrice extends MarketMetadata {
   name: string;
   value: number;
   change_pct: number;
@@ -104,12 +123,12 @@ export interface IndexPrice {
 
 /** 통합 현재가 (마켓 자동 판별) */
 export async function getPrice(ticker: string, currency = "krw"): Promise<StockPrice> {
-  return fetchAPI(`/api/price/${ticker}?currency=${currency}`);
+  return fetchMarket({ kind: "quote", ticker, currency });
 }
 
 /** 복수 현재가 (마켓 혼합 가능) */
 export async function getPrices(tickers: string[], currency = "krw"): Promise<StockPrice[]> {
-  return fetchAPI(`/api/prices?tickers=${tickers.join(",")}&currency=${currency}`);
+  return fetchMarket({ kind: "quotes", tickers: tickers.join(","), currency });
 }
 
 /** 일봉 차트 (마켓 자동 판별) */
@@ -118,7 +137,7 @@ export async function getChart(
   period: "1M" | "3M" | "6M" | "1Y" = "1M",
   currency = "krw",
 ): Promise<ChartResponse> {
-  return fetchAPI(`/api/price/${ticker}/chart?period=${period}&currency=${currency}`);
+  return fetchMarket({ kind: "chart", ticker, period, currency });
 }
 
 /** 계좌 잔고 (KIS) */
@@ -133,7 +152,7 @@ export async function placeOrder(req: OrderRequest): Promise<OrderResult> {
 
 /** 전체 지수 (국내 + 글로벌 + BTC) */
 export async function getIndices(): Promise<IndexPrice[]> {
-  return fetchAPI("/api/indices");
+  return fetchMarket({ kind: "indices" });
 }
 
 /** 백엔드 연결 확인 */

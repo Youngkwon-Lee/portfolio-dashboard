@@ -140,3 +140,15 @@ python backend/paper_soak_runner.py \
 포트폴리오·지수·차트는 로딩, 백엔드 응답, 확인 불가를 구분합니다. 백엔드 응답은 공급자 검증이나 실시간 시세 보장이 아닙니다. 요청 실패 시 이전 값을 숨기고, 차트를 임의의 샘플 캔들로 대체하지 않습니다. 고정 봇·체결 예시와 기본 AI 리스크 점수는 DEMO / 샘플로 표시합니다. 계좌 조회 차단 정책은 그대로 유지됩니다.
 
 `pnpm test:provenance`는 네트워크 없이 표시 상태·종목/기간 격리·응답 검증 계약을 검사합니다. 실제 공급자 데이터나 배포 동작을 검증하는 명령은 아닙니다.
+
+## Authenticated read-only public market data
+
+`GET /api/market` supports `kind=quote&ticker=AAPL`, `kind=chart&ticker=005930&period=1M`, `kind=quotes&tickers=AAPL,005930`, and `kind=indices`. The existing Cloudflare Access proxy remains mandatory; the route repeats the JWT guard before parsing or reading its cache. Responses use private/no-store headers even though underlying prices are public. No keys, service tokens, policy changes, account access, orders, automatic trading, or additional paid service are used.
+
+Sources are fixed server-side HTTPS Yahoo Finance daily chart and Upbit public KRW endpoints. No client cookies/authorization are forwarded. Redirects fail closed; requests time out at 8 seconds with a shared 18-second operation deadline, streamed JSON is capped at 1 MiB, concurrency is capped at three upstream calls, quote batches at ten unique symbols, and successful results use a 15-second/128-entry LRU cache. Failed refreshes never fall back to stored prices. Provider errors are generic. These are best-effort public data sources, not exchange-grade feeds or a real-time guarantee; delays, throttling, outages, and missing instruments are expected.
+
+Only raw `005930` and `000660` explicitly map to `.KS`. Other Korean symbols require an explicit six-digit `.KS` or `.KQ` suffix; US symbols use a bounded uppercase format. The existing known crypto set uses Upbit KRW; unsupported listings fail visibly. Crypto USD requests are rejected. The legacy default `currency=krw` does not convert US stocks: Yahoo's native USD (or Korean KRW) is validated and displayed. No FX conversion is performed.
+
+Each quote/chart shows source, provider symbol, native currency, provider `as_of` (last-trade timestamp for Upbit quotes), exchange timezone, and separate `fetched_at` receipt time. Yahoo daily dates use the exchange calendar; Upbit daily dates use its UTC candle field. Quotes compare against the previous daily close from a dedicated one-day request, not the start of a long chart window. Charts contain validated provider bars only, sorted and deduplicated, without synthetic candles. The actual covered dates are displayed; Upbit `1Y` is explicitly limited to at most 200 bars, **not** a full year. Indices are fixed KOSPI, KOSDAQ, S&P 500, NASDAQ, and BTC/KRW, with isolated per-item failures.
+
+Market hooks do not depend on private-backend health. Existing balance/order/AI/backtest paths and paper-only/DEMO labels remain unchanged; private account unavailability is not replaced with mocks. `pnpm test:market` uses deterministic fixtures and mocked fetch, not live-provider or deployed end-to-end evidence. CI also retains Access, provenance, backend regression, typecheck and build checks.

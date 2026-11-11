@@ -1,9 +1,10 @@
 import type { Balance, Candle, ChartResponse, IndexPrice, StockPrice } from "./api";
 
-export type DataStatus = "loading" | "backend" | "unavailable" | "demo";
+export type DataStatus = "loading" | "market" | "backend" | "unavailable" | "demo";
 export type DataState<T> = { status: DataStatus; data: T | null };
 export const DATA_LABELS: Record<DataStatus, string> = {
   loading: "불러오는 중",
+  market: "공개 시장 데이터 · 지연 가능 · 실시간 보장 아님",
   backend: "백엔드 응답 · PAPER ONLY · 실시간 보장 아님",
   unavailable: "백엔드 데이터를 확인할 수 없음 · 이전 값 미표시",
   demo: "DEMO / 샘플 · 실제 계좌·운영 결과 아님",

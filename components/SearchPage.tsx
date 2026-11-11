@@ -1,7 +1,9 @@
 "use client";
 import { useState, useRef } from "react";
-import { getPrice, getChart, detectMarket } from "@/lib/api";
-import type { StockPrice, Candle } from "@/lib/api";
+import { detectMarket } from "@/lib/api";
+import { usePrice, useChart } from "@/hooks/usePortfolio";
+import DataProvenance from "./DataProvenance";
+import MarketSource from "./MarketSource";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const POPULAR = [
@@ -19,44 +21,29 @@ const PERIOD_OPTIONS = ["1M", "3M", "6M", "1Y"] as const;
 type Period = typeof PERIOD_OPTIONS[number];
 
 export default function SearchPage() {
-  const [query, setQuery]         = useState("");
-  const [result, setResult]       = useState<StockPrice | null>(null);
-  const [candles, setCandles]     = useState<Candle[]>([]);
-  const [period, setPeriod]       = useState<Period>("1M");
-  const [loading, setLoading]     = useState(false);
-  const [chartLoading, setChartLoading] = useState(false);
-  const [error, setError]         = useState("");
+  const [query, setQuery] = useState("005930");
+  const [ticker, setTicker] = useState("005930");
+  const [period, setPeriod] = useState<Period>("1M");
+  // These shared hooks scope both render and async completions to ticker/period.
+  // A failed refresh clears its value instead of retaining a prior symbol/bar.
+  const priceState = usePrice(ticker);
+  const chartState = useChart(ticker, period);
+  const result = priceState.data;
+  const candles = chartState.candles;
+  const loading = priceState.status === "loading";
+  const chartLoading = chartState.loading;
+  const error = priceState.status === "unavailable"
+    ? "공개 시세를 불러오지 못했습니다. 종목 코드나 제공자 제한을 확인해 주세요. 이전 가격은 표시하지 않습니다."
+    : "";
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function search(ticker: string) {
-    if (!ticker.trim()) return;
-    setLoading(true);
-    setError("");
-    setResult(null);
-    setCandles([]);
-    try {
-      const price = await getPrice(ticker.trim().toUpperCase());
-      setResult(price);
-      loadChart(ticker.trim().toUpperCase(), period);
-    } catch {
-      setError(`"${ticker}" 종목을 찾을 수 없습니다.`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadChart(ticker: string, p: Period) {
-    setChartLoading(true);
-    try {
-      const res = await getChart(ticker, p);
-      setCandles(res.candles);
-    } catch {}
-    finally { setChartLoading(false); }
+  function search(value: string) {
+    const next = value.trim().toUpperCase();
+    if (next) setTicker(next);
   }
 
   function handlePeriod(p: Period) {
     setPeriod(p);
-    if (result) loadChart(result.ticker, p);
   }
 
   const firstClose = candles[0]?.close ?? 0;
@@ -76,7 +63,7 @@ export default function SearchPage() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && search(query)}
-          placeholder="티커 입력  (AAPL, BTC, 005930 …)"
+          placeholder="티커 입력 (AAPL, BTC, 005930.KS …)"
           className="flex-1 px-3 py-2 rounded text-sm outline-none"
           style={{ background: "var(--card)", border: "1px solid var(--card-border)", color: "var(--foreground)" }}
         />
@@ -111,11 +98,11 @@ export default function SearchPage() {
         </div>
       )}
 
-      {/* 결과 */}
-      {result && (
+      {/* 결과: 가격과 차트는 독립적으로 실패 상태를 표시합니다. */}
         <div className="flex flex-col gap-4">
+          <DataProvenance status={priceState.status} />
           {/* 가격 헤더 */}
-          <div className="p-4 rounded-lg" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
+          {result && <div className="p-4 rounded-lg" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
             <div className="flex items-start justify-between">
               <div>
                 <div className="flex items-center gap-2">
@@ -140,6 +127,7 @@ export default function SearchPage() {
               </div>
             </div>
 
+            <MarketSource data={result} />
             {/* 세부 지표 */}
             <div className="grid grid-cols-3 gap-3 mt-4">
               {[
@@ -153,12 +141,12 @@ export default function SearchPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* 차트 */}
           <div className="p-4 rounded-lg" style={{ background: "var(--card)", border: "1px solid var(--card-border)" }}>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold">가격 차트</span>
+              <span className="text-sm font-semibold">가격 변동률 · 첫 일봉 종가 기준</span>
               <div className="flex gap-1">
                 {PERIOD_OPTIONS.map((p) => (
                   <button
@@ -177,8 +165,12 @@ export default function SearchPage() {
               </div>
             </div>
 
+            <DataProvenance status={chartState.status} />
+            <MarketSource data={chartState.metadata} />
             {chartLoading ? (
               <div className="h-48 flex items-center justify-center text-sm" style={{ color: "var(--muted)" }}>로딩 중…</div>
+            ) : candles.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm" style={{ color: "var(--muted)" }}>차트 데이터를 확인할 수 없습니다. 이전 차트는 표시하지 않습니다.</div>
             ) : (
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
@@ -186,19 +178,18 @@ export default function SearchPage() {
                   <YAxis tick={{ fontSize: 10, fill: "#8b949e" }} domain={["auto", "auto"]} />
                   <Tooltip
                     contentStyle={{ background: "#161b22", border: "1px solid #30363d", fontSize: 12 }}
-                    formatter={(v: unknown) => [`${(v as number).toFixed(2)}%`, "수익률"]}
+                    formatter={(v: unknown) => [`${(v as number).toFixed(2)}%`, "기간 가격 변동률"]}
                   />
                   <ReferenceLine y={0} stroke="#30363d" strokeDasharray="3 3" />
                   <Line
                     type="monotone" dataKey="pct" dot={false} strokeWidth={2}
-                    stroke={chartData.at(-1)?.pct ?? 0 >= 0 ? "#3fb950" : "#f85149"}
+                    stroke={(chartData.at(-1)?.pct ?? 0) >= 0 ? "#3fb950" : "#f85149"}
                   />
                 </LineChart>
               </ResponsiveContainer>
             )}
           </div>
         </div>
-      )}
     </div>
   );
 }

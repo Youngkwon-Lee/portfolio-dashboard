@@ -66,6 +66,9 @@ jobs:
       - name: Verify Cloudflare Access JWT boundary
         run: pnpm run test:access
 
+      - name: Verify dashboard data provenance contracts
+        run: pnpm run test:provenance
+
       - name: TypeScript check
         run: pnpm run typecheck
 

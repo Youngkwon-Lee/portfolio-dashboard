@@ -3,6 +3,7 @@ import { useState, useRef, useCallback } from "react";
 import { useBalance } from "@/hooks/usePortfolio";
 import { streamPortfolioAnalysis, getAIStrategies, streamChat } from "@/lib/aiApi";
 import type { Strategy } from "@/lib/aiApi";
+import DataProvenance from "./DataProvenance";
 import { aiInsights } from "@/lib/mockData";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -188,6 +189,7 @@ export default function AIAnalysisPanel() {
       {/* ── 분석 탭 ── */}
       {tab === "analysis" && (
         <div className="flex flex-col gap-3">
+          {riskScore === null && <DataProvenance status="demo" />}
           {/* 리스크 점수 */}
           <div style={{ background: "#0d1117", borderRadius: 6, padding: "10px 12px" }}>
             <div className="flex items-center justify-between mb-1">

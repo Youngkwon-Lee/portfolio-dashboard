@@ -1,4 +1,5 @@
 "use client";
+import DataProvenance from "./DataProvenance";
 import { useBalance } from "@/hooks/usePortfolio";
 
 const marketColor: Record<string, string> = {
@@ -13,18 +14,19 @@ function guessMarket(ticker: string) {
 }
 
 export default function HoldingsTable() {
-  const { data, loading } = useBalance();
+  const { data, loading, status } = useBalance();
 
   if (loading) return (
     <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}
          className="p-4 h-32 flex items-center justify-center">
-      <span className="text-xs" style={{ color: "var(--muted)" }}>불러오는 중...</span>
+      <span className="text-xs" style={{ color: "var(--muted)" }}><DataProvenance status={status} /></span>
     </div>
   );
-  if (!data) return null;
+  if (!data) return <div className="p-4" style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}><DataProvenance status={status} /></div>;
 
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }} className="p-4">
+      <DataProvenance status={status} />
       <div className="text-xs font-semibold tracking-wide mb-3" style={{ color: "var(--muted)" }}>보유 종목</div>
       <div className="overflow-auto">
         <table className="w-full text-xs">

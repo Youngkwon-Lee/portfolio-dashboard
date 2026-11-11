@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createChart,
   CandlestickSeries,
@@ -12,6 +12,7 @@ import {
   type HistogramData,
   type Time,
 } from "lightweight-charts";
+import DataProvenance from "./DataProvenance";
 import { useChart, usePrice } from "@/hooks/usePortfolio";
 import { detectMarket } from "@/lib/api";
 import type { Candle } from "@/lib/api";
@@ -76,8 +77,8 @@ export default function CandlestickChart() {
   const ma5Ref       = useRef<ISeriesApi<"Line"> | null>(null);
   const ma20Ref      = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const { candles, loading } = useChart(ticker, period);
-  const livePrice            = usePrice(ticker);
+  const { candles, loading, status } = useChart(ticker, period);
+  const { data: livePrice, status: priceStatus } = usePrice(ticker);
   const market               = detectMarket(ticker);
 
   // ── 차트 초기화 ──────────────────────────────
@@ -137,6 +138,7 @@ export default function CandlestickChart() {
 
     // Tooltip 커스텀
     const tooltip = document.createElement("div");
+    tooltip.dataset.chartTooltip = "true";
     tooltip.style.cssText = `
       position:absolute; left:12px; top:12px; z-index:10;
       background:#161b22; border:1px solid #30363d; border-radius:6px;
@@ -189,7 +191,9 @@ export default function CandlestickChart() {
 
   useEffect(() => {
     if (!candleRef.current || !volRef.current || !ma5Ref.current || !ma20Ref.current) return;
-    if (!candles.length) return;
+    // Empty setData clears the previously selected symbol, including overlays.
+    const tooltip = containerRef.current?.querySelector<HTMLElement>("[data-chart-tooltip]");
+    if (tooltip) tooltip.style.display = "none";
 
     const candleData: CandlestickData<Time>[] = candles.map((c) => ({
       time:  c.date as Time,
@@ -213,22 +217,7 @@ export default function CandlestickChart() {
     chartRef.current?.timeScale().fitContent();
   }, [candles]);
 
-  // ── 실시간 가격 업데이트 ──────────────────────
-
-  useEffect(() => {
-    if (!livePrice || !candleRef.current) return;
-    // 오늘 날짜의 캔들을 실시간으로 업데이트
-    const today = new Date().toISOString().slice(0, 10) as Time;
-    const last  = candles[candles.length - 1];
-    if (!last) return;
-    candleRef.current.update({
-      time:  today,
-      open:  last.open,
-      high:  Math.max(last.high, livePrice.current_price),
-      low:   Math.min(last.low,  livePrice.current_price),
-      close: livePrice.current_price,
-    });
-  }, [livePrice]);
+  // Quotes are displayed separately; do not fabricate today's OHLC from a historical candle.
 
   // ── MA 토글 ───────────────────────────────────
 
@@ -243,7 +232,7 @@ export default function CandlestickChart() {
   // ── 헤더 정보 ─────────────────────────────────
 
   const last = candles[candles.length - 1];
-  const displayPrice    = livePrice?.current_price  ?? last?.close   ?? 0;
+  const displayPrice    = livePrice?.current_price  ?? last?.close   ?? null;
   const displayChange   = livePrice?.change         ?? (last && candles.length > 1 ? last.close - candles[candles.length - 2].close : 0);
   const displayPct      = livePrice?.change_pct     ?? 0;
   const isUp            = displayChange >= 0;
@@ -270,15 +259,15 @@ export default function CandlestickChart() {
           {/* 현재가 */}
           <div className="flex items-center gap-2">
             <span className="font-bold text-sm">
-              {isKRX ? "₩" : ""}{displayPrice.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}
+              {displayPrice === null ? "가격 이용 불가" : `${isKRX ? "₩" : ""}${displayPrice.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}`}
             </span>
-            <span className="text-xs" style={{ color: priceColor }}>
+            {livePrice && <span className="text-xs" style={{ color: priceColor }}>
               {isUp ? "▲" : "▼"} {Math.abs(displayChange).toLocaleString("ko-KR", { maximumFractionDigits: 2 })} ({displayPct.toFixed(2)}%)
-            </span>
+            </span>}
             {livePrice && (
               <span className="text-xs px-1.5 py-0.5 rounded font-semibold"
                 style={{ background: "var(--accent-green)22", color: "var(--accent-green)", border: "1px solid var(--accent-green)44" }}>
-                실시간 시세
+                백엔드 현재가 · 실시간 보장 아님
               </span>
             )}
           </div>
@@ -315,12 +304,14 @@ export default function CandlestickChart() {
         </div>
       </div>
 
+      <div className="mb-2"><DataProvenance status={status} />{!livePrice && last && <span className="text-xs ml-2" style={{ color: "var(--muted)" }}>가격: 마지막 일봉 종가 ({last.date})</span>}</div>
+      <div className="mb-2 text-xs" style={{ color: "var(--muted)" }}>현재가: <DataProvenance status={priceStatus} /></div>
       {/* ── 차트 컨테이너 ── */}
       <div className="relative">
-        {loading && (
+        {(loading || status === "unavailable") && (
           <div className="absolute inset-0 flex items-center justify-center z-10"
             style={{ background: "var(--card)cc" }}>
-            <span className="text-xs" style={{ color: "var(--muted)" }}>차트 로딩 중...</span>
+            <span className="text-xs" style={{ color: "var(--muted)" }}>{loading ? "차트 로딩 중..." : `${ticker} 차트 이용 불가 · 샘플 대체 없음`}</span>
           </div>
         )}
         <div ref={containerRef} style={{ height: 280 }} />

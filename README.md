@@ -127,3 +127,10 @@ python backend/paper_soak_runner.py \
 러너는 저장소 밖의 새 SQLite만 사용하고 Python 소켓 연결을 모두 차단합니다. 실제 `execute_order` 경로로 매 분 paper 왕복 체결과 중복 재전송을 확인하고, 시세 장애·비정상 재연결·kill switch를 주기적으로 주입합니다. 진행 및 최종 판정은 `$wall_clock_root/run/evidence.json`에 원자적으로 기록되며 `status: "passed"`는 24시간 경과, 원장 ID 유일성, paper-only 원장, 열린 포지션 없음, 네트워크 시도 0, 소스 및 `backend/portfolio.db` 지문 불변을 모두 만족할 때만 기록됩니다.
 
 전체 안전 테스트는 paper 기본값, live fail-closed, 자격 증명 비노출 거부, 영구 원장 중복 차단, 원장 장애 시 fail-closed, 비정상 재연결, 일일 손실 한도, 최대 낙폭, kill switch, 손상된 상태 파일, 인증 엔드포인트의 downstream 미호출을 확인합니다.
+
+## Cloudflare Access origin gate
+
+프런트엔드의 모든 경로는 유효한 Cloudflare Access JWT 헤더가 필요합니다.
+직접 Vercel 주소와 로컬 개발도 예외가 없으며 쿠키만으로는 접근할 수 없습니다.
+고정된 신뢰 설정, 검증 명령(`pnpm test:access`), 배포·로그인 검증 한계는
+[origin authentication 문서](docs/cloudflare-access.md)를 참고하세요.

@@ -63,6 +63,9 @@ jobs:
       - name: Install exact lockfile dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Cloudflare Access JWT boundary
+        run: pnpm run test:access
+
       - name: TypeScript check
         run: pnpm run typecheck
 

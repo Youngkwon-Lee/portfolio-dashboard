@@ -1,73 +1,26 @@
-"use client";
-import DataProvenance from "./DataProvenance";
-import { useBalance } from "@/hooks/usePortfolio";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-
-const COLORS = ["#58a6ff", "#3fb950", "#e3b341", "#bc8cff"];
-
-function fmt(n: number) { return n.toLocaleString("ko-KR"); }
-
+'use client';
+import { useState } from 'react';
+import { useManualPortfolio } from './ManualPortfolioProvider';
+import { money, percent, totals, type Currency } from '@/lib/manual/domain';
 export default function PortfolioSummary() {
-  const { data, loading, status } = useBalance();
-
-  if (loading) return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}
-         className="p-4 flex items-center justify-center h-48">
-      <span className="text-xs" style={{ color: "var(--muted)" }}><DataProvenance status={status} /></span>
-    </div>
-  );
-  if (!data) return <div className="p-4" style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}><DataProvenance status={status} /></div>;
-
-  const pnlColor = data.pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
-
-  // 자산 배분용 파이 데이터 (보유 종목별)
-  const pieData = data.holdings.slice(0, 4).map((h, i) => ({
-    name: h.ticker,
-    value: h.value,
-    color: COLORS[i % COLORS.length],
-  }));
-
-  return (
-    <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }} className="p-4">
-      <div className="mb-2"><DataProvenance status={status} /></div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs font-semibold tracking-wide" style={{ color: "var(--muted)" }}>총 자산</span>
-        <span className="text-xs" style={{ color: pnlColor }}>
-          {data.pnl_pct >= 0 ? "+" : ""}{data.pnl_pct.toFixed(2)}% 총 수익률
-        </span>
-      </div>
-      <div className="text-2xl font-bold mb-1">₩{fmt(data.total_value)}</div>
-      <div className="flex gap-3 text-xs mb-4 flex-wrap">
-        <span>
-          <span style={{ color: "var(--muted)" }}>수익 </span>
-          <span style={{ color: pnlColor }}>{data.pnl >= 0 ? "+" : ""}₩{fmt(data.pnl)}</span>
-        </span>
-        <span>
-          <span style={{ color: "var(--muted)" }}>현금 </span>
-          <span>₩{fmt(data.cash)}</span>
-        </span>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <ResponsiveContainer width={90} height={90}>
-          <PieChart>
-            <Pie data={pieData} cx="50%" cy="50%" innerRadius={24} outerRadius={42} dataKey="value" paddingAngle={2}>
-              {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
-            </Pie>
-            <Tooltip formatter={(v) => `₩${fmt(Number(v))}`}
-              contentStyle={{ background: "var(--card)", border: "1px solid var(--card-border)", fontSize: 11 }} />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="flex flex-col gap-1">
-          {pieData.map((d) => (
-            <div key={d.name} className="flex items-center gap-2 text-xs">
-              <span className="w-2 h-2 rounded-full shrink-0" style={{ background: d.color }}></span>
-              <span style={{ color: "var(--muted)" }}>{d.name}</span>
-              <span className="font-semibold">{data.total_value > 0 ? `${((d.value / data.total_value) * 100).toFixed(0)}%` : "해당 없음"}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  const s=useManualPortfolio(); const [confirm,setConfirm]=useState<{raw:string|null}|null>(null);
+  return <section className="p-3 rounded-lg text-xs space-y-3" style={{background:'var(--card)',border:'1px solid var(--card-border)'}} aria-label="수동 가상 포트폴리오 요약">
+    <h2 className="font-semibold" style={{color:'var(--accent-blue)'}}>수동 가상 · 실계좌 아님</h2>
+    <p>이 브라우저에만 저장 · 기기 간 동기화 안 됨</p><p style={{color:'var(--muted)'}}>암호화되지 않은 localStorage입니다. 브라우저 데이터 삭제 시 사라집니다. 공유 기기 사용에 주의하세요. 계좌번호·비밀번호·API 키는 입력하지 마세요.</p>
+    {s.error && <p role="alert">{s.error}</p>}{s.notice && <p role="status">{s.notice}</p>}
+    {!s.ready && !s.error && <p>로컬 데이터 불러오는 중</p>}
+    {s.ready && !s.error && (['KRW','USD'] as Currency[]).map(c=>{const t=totals(s.p,s.quotes,c);return <div key={c} className="border-t pt-2 space-y-1" style={{borderColor:'var(--card-border)'}}>
+      <h3 className="font-bold">{c} · 환산 없음</h3>
+      <p>총 자산: {t.total===null?'확인 불가':money(t.total,c)}</p>
+      <p>보유 평가액: {t.value===null?'확인 불가':money(t.value,c)}</p>
+      <p>입력 보유 원가: {money(t.cost,c)}</p><p>입력 잔여 현금: {money(t.cash,c)}</p>
+      <p>보유평가손익: {t.pnl===null?'확인 불가':money(t.pnl,c)}</p><p>보유수익률: {t.pnl===null?'확인 불가':percent(t.pnl,t.cost)}</p>
+      {!t.complete && <p style={{color:'var(--accent-red)'}}>일부 시세 {s.loading?'조회 중':'누락'}. 부분 합계를 총액으로 표시하지 않습니다.</p>}
+    </div>;})}
+    <p style={{color:'var(--muted)'}}>통화별 표시 · 환율 환산 없음 · 수익률은 현금 제외. 미실현 손익입니다. 수수료·세금·배당·분할·실현손익은 자동 반영하지 않습니다.</p>
+    <button type="button" className="underline" onClick={s.retry} disabled={s.loading}>시세 다시 조회</button>
+    <p>공개 시세만 약 30초 간격 조회 · 실시간 보장 아님</p>
+    <button type="button" className="underline" onClick={()=>setConfirm({raw:s.raw})}>로컬 데이터 초기화</button>
+    {confirm && <div role="group" aria-label="초기화 확인" className="space-y-2"><p>이 브라우저의 수동 가상 종목과 현금을 모두 삭제할까요? 되돌릴 수 없습니다.</p><button autoFocus type="button" onClick={()=>{if(s.reset(confirm.raw))setConfirm(null);}}>삭제 확인</button>{' '}<button type="button" onClick={()=>setConfirm(null)}>취소</button></div>}
+  </section>;
 }

@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import TopBar from "@/components/TopBar";
+import { ManualPortfolioProvider } from "@/components/ManualPortfolioProvider";
 import PortfolioSummary from "@/components/PortfolioSummary";
 import HoldingsTable from "@/components/HoldingsTable";
 import CandlestickChart from "@/components/CandlestickChart";
@@ -75,8 +76,10 @@ export default function Dashboard() {
             {/* LEFT */}
             <div className="sidebar w-64 shrink-0 flex flex-col gap-3 p-3 overflow-y-auto"
               style={{ borderRight: "1px solid var(--card-border)" }}>
-              <PortfolioSummary />
-              <HoldingsTable />
+              <ManualPortfolioProvider>
+                <PortfolioSummary />
+                <HoldingsTable />
+              </ManualPortfolioProvider>
             </div>
 
             {/* CENTER */}

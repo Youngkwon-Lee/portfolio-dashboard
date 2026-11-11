@@ -1,4 +1,5 @@
 "use client";
+import DataProvenance from "./DataProvenance";
 import { useBalance } from "@/hooks/usePortfolio";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -7,15 +8,15 @@ const COLORS = ["#58a6ff", "#3fb950", "#e3b341", "#bc8cff"];
 function fmt(n: number) { return n.toLocaleString("ko-KR"); }
 
 export default function PortfolioSummary() {
-  const { data, loading, useMock } = useBalance();
+  const { data, loading, status } = useBalance();
 
   if (loading) return (
     <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}
          className="p-4 flex items-center justify-center h-48">
-      <span className="text-xs" style={{ color: "var(--muted)" }}>불러오는 중...</span>
+      <span className="text-xs" style={{ color: "var(--muted)" }}><DataProvenance status={status} /></span>
     </div>
   );
-  if (!data) return null;
+  if (!data) return <div className="p-4" style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }}><DataProvenance status={status} /></div>;
 
   const pnlColor = data.pnl >= 0 ? "var(--accent-green)" : "var(--accent-red)";
 
@@ -28,11 +29,7 @@ export default function PortfolioSummary() {
 
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--card-border)", borderRadius: 8 }} className="p-4">
-      {useMock && (
-        <div className="text-xs mb-2 px-2 py-1 rounded" style={{ background: "var(--accent-yellow)22", color: "var(--accent-yellow)" }}>
-          ⚡ 백엔드 미연결 — 샘플 데이터
-        </div>
-      )}
+      <div className="mb-2"><DataProvenance status={status} /></div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-semibold tracking-wide" style={{ color: "var(--muted)" }}>총 자산</span>
         <span className="text-xs" style={{ color: pnlColor }}>
@@ -66,7 +63,7 @@ export default function PortfolioSummary() {
             <div key={d.name} className="flex items-center gap-2 text-xs">
               <span className="w-2 h-2 rounded-full shrink-0" style={{ background: d.color }}></span>
               <span style={{ color: "var(--muted)" }}>{d.name}</span>
-              <span className="font-semibold">{((d.value / data.total_value) * 100).toFixed(0)}%</span>
+              <span className="font-semibold">{data.total_value > 0 ? `${((d.value / data.total_value) * 100).toFixed(0)}%` : "해당 없음"}</span>
             </div>
           ))}
         </div>

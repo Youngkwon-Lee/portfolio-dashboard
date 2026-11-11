@@ -1,4 +1,5 @@
 "use client";
+import DataProvenance from "./DataProvenance";
 import { tradingBots, recentOrders } from "@/lib/mockData";
 import { useState } from "react";
 import { FlaskConical } from "lucide-react";
@@ -21,6 +22,8 @@ export default function TradingPanel() {
         </div>
       </div>
 
+      <DataProvenance status="demo" />
+      <p className="text-xs" style={{ color: "var(--muted)" }}>고정 예시입니다. 아래 봇 상태·손익·승률·체결은 백엔드 운영 상태가 아닙니다.</p>
       {activeTab === "bots" && (
         <div className="flex flex-col gap-2">
           {tradingBots.map((bot) => (

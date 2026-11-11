@@ -72,6 +72,9 @@ jobs:
       - name: Verify secure public market integration
         run: pnpm run test:market
 
+      - name: Verify local manual paper portfolio
+        run: pnpm run test:manual
+
       - name: TypeScript check
         run: pnpm run typecheck
 

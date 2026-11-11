@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test:access": "node scripts/test-access.mjs",
     "test:provenance": "node scripts/test-provenance.mjs",
-    "test:market": "node scripts/test-market.mjs"
+    "test:market": "node scripts/test-market.mjs",
+    "test:manual": "node scripts/test-manual.mjs"
   },
   "dependencies": {
     "jose": "^6.2.17",

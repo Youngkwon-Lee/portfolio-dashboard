@@ -152,3 +152,20 @@ Only raw `005930` and `000660` explicitly map to `.KS`. Other Korean symbols req
 Each quote/chart shows source, provider symbol, native currency, provider `as_of` (last-trade timestamp for Upbit quotes), exchange timezone, and separate `fetched_at` receipt time. Yahoo daily dates use the exchange calendar; Upbit daily dates use its UTC candle field. Quotes compare against the previous daily close from a dedicated one-day request, not the start of a long chart window. Charts contain validated provider bars only, sorted and deduplicated, without synthetic candles. The actual covered dates are displayed; Upbit `1Y` is explicitly limited to at most 200 bars, **not** a full year. Indices are fixed KOSPI, KOSDAQ, S&P 500, NASDAQ, and BTC/KRW, with isolated per-item failures.
 
 Market hooks do not depend on private-backend health. Existing balance/order/AI/backtest paths and paper-only/DEMO labels remain unchanged; private account unavailability is not replaced with mocks. `pnpm test:market` uses deterministic fixtures and mocked fetch, not live-provider or deployed end-to-end evidence. CI also retains Access, provenance, backend regression, typecheck and build checks.
+
+## Phase 1: 수동 가상 포트폴리오 (실계좌 아님)
+
+대시보드 왼쪽 요약과 종목 목록만 공유하는 수동 입력 기능입니다. 초기 상태는 빈 종목/0 현금이며 샘플이나 계좌 잔고를 가져오지 않습니다. 기존 실계좌 잔고, AI 분석, 주문, 자동매매 및 DEMO 경계는 변경하지 않습니다. 수동 데이터로 AI 유료 분석을 활성화하지 않습니다.
+
+- **이 브라우저에만 저장 · 기기 간 동기화 안 됨.** 현재 origin의 `quant-lab:manual-paper-portfolio:v1` 키 하나에 암호화되지 않은 localStorage JSON을 저장합니다. 로그인 계정과 동기화하지 않으며 브라우저 데이터 삭제 시 사라집니다. 가상 장부용 수량·평균가·현금은 직접 입력할 수 있습니다. 공유 기기 사용에 주의하고 계좌번호·비밀번호·API 키는 입력하지 마세요. 같은 origin의 스크립트/브라우저 접근자는 평문을 읽을 수 있습니다.
+- 최대 10종목, JSON 최대 16 KiB. 종목 ID 및 정규화된 종목 코드는 중복 불가입니다. `005930`, `000660`은 `.KS`로 정규화합니다. 6자리 `.KS`/`.KQ`, 제한된 대문자 미국 심볼, 기존 공개 시세 경로가 지원하는 KRW 가상자산만 허용합니다. 종목이 통화를 결정하며 USD 가상자산/환산은 없습니다.
+- 수량·평균 매입단가·현금은 최대 소수 8자리의 정규 십진 문자열입니다. 수량은 0 초과 10억 이하, 단가는 0 초과 1조 이하, 통화별 현금은 0 이상 1조 이하입니다. 지수 표기, 음수, 비유한 값, 알 수 없는 필드/버전, 잘못된 통화는 거부합니다. 통화가 바뀌는 종목 편집은 평균 단가를 비워 재입력을 요구합니다.
+- 현금은 사용자가 입력한 **잔여 현금**입니다. 종목 추가/편집/삭제가 현금을 자동 차감하거나 증가시키지 않습니다. 통화별 총 자산 = 완전한 보유 평가액 + 해당 통화의 잔여 현금. KRW와 USD는 합치지 않으며 환율을 적용하지 않습니다.
+- BigInt 고정소수: 입력/시세는 10^8, 수량×단가와 수량×시세는 10^16 단위입니다. 반올림하지 않은 개별 곱을 먼저 합산하고 표시할 때만 KRW 0자리/USD 2자리로 **절댓값 절반 이상은 0에서 멀어지는 방향(round-half-away-from-zero)** 으로 반올림합니다. 음의 0은 표시하지 않습니다. 공급자 Number는 유한 양수/최대값을 검사한 뒤 최단 십진 표현(지수 표현 포함)을 정수 연산으로 소수 8자리 반올림합니다. 8자리 변환 후 0이 되는 시세는 거부합니다.
+- 보유평가손익 = 평가액 − 원가, 보유수익률 = 보유평가손익/원가이며 현금은 수익률 분모에 없습니다. 현금만 있으면 총 자산은 유효하며 수익률은 해당 없음입니다. **미실현 평가손익**일 뿐 수수료·세금·배당·분할·실현손익을 자동 반영하지 않습니다.
+- 시세/계산 결과는 저장하지 않습니다. 기존 same-origin `GET /api/market`에 `kind=quote`, 종목과 원래 통화만 전송합니다. 수량·평균가·현금·문서는 전송하지 않습니다. 최대 동시 2개, 한 회 전체 최대 19초, 완료 후 약 30초 간격이며 중첩 폴링하지 않습니다. 보유 종목 변경/언마운트 시 취소하고 이전 응답을 무시합니다. 출처·종목·통화·제공자 심볼·기준시각·수신시각을 검사하며 수신시각을 시장 기준시각으로 가장하지 않습니다. 휴장 중 과거 거래 기준시각 자체는 거부하지 않습니다.
+- 시세를 다시 읽거나 실패하면 이전 시세를 유지하지 않습니다. 한 통화 그룹에 누락/조회 중/잘못된 시세가 하나라도 있으면 그 그룹의 평가액·손익·수익률·총 자산은 확인 불가입니다. 원가·현금 및 조회에 성공한 개별 종목은 구분해서 표시합니다. 부분 합계를 완전한 총액으로 표시하거나 파이 차트를 만들지 않습니다.
+- 빈 키는 마운트 시 쓰지 않습니다. 저장 전 원본 문자열 비교와 저장 후 읽기 검증을 수행합니다. 다른 탭의 `storage` 이벤트를 동기화하며 변경 이전 편집은 저장을 거부합니다. localStorage는 **프로세스 간 원자적 compare-and-swap이 아니므로** 정확히 동시인 다중 탭 쓰기를 완벽히 방지할 수 없습니다. 한 탭에서 편집하세요.
+- 저장 차단/할당량 초과는 성공으로 표시하지 않습니다. 손상되거나 지원하지 않는 버전의 원본은 덮어쓰지 않으며 편집을 차단합니다. 명시적인 확인 후 이 기능의 키 하나만 초기화할 수 있습니다. 다른 저장 키나 금융 기록을 읽지 않으며 `localStorage.clear()`를 사용하지 않습니다.
+
+검증: `pnpm test:manual`은 네트워크/자격증명/추가 네이티브 패키지 없이 순수 TS를 컴파일하여 정밀 계산, 스키마/저장 실패/충돌, 시세 출처/취소/기한/부분 실패와 private AI 분리 wiring을 검사합니다. CI는 기존 access/provenance/market 150개, manual 테스트, 타입 검사, Next 빌드 및 기존 backend 검증을 유지합니다. 로컬 코드/테스트 통과는 배포나 실제 계좌 연동을 의미하지 않습니다.

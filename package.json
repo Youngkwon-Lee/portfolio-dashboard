@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:access": "node scripts/test-access.mjs",
-    "test:provenance": "node scripts/test-provenance.mjs"
+    "test:provenance": "node scripts/test-provenance.mjs",
+    "test:market": "node scripts/test-market.mjs"
   },
   "dependencies": {
     "jose": "^6.2.17",

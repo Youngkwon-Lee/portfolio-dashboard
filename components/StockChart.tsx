@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import DataProvenance from "./DataProvenance";
+import MarketSource from "./MarketSource";
 import { useChart, usePrice } from "@/hooks/usePortfolio";
 import { ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
@@ -12,7 +13,7 @@ export default function StockChart() {
   const [input, setInput] = useState("005930");
   const [period, setPeriod] = useState<Period>("1M");
 
-  const { candles, loading, status } = useChart(ticker, period);
+  const { candles, loading, status, metadata } = useChart(ticker, period);
   const { data: livePrice, status: priceStatus } = usePrice(ticker);
 
   const data = candles.map((c, i, arr) => {
@@ -59,13 +60,13 @@ export default function StockChart() {
             />
           </form>
           <div>
-            <span className="font-bold text-sm">{displayPrice === null ? "가격 이용 불가" : displayPrice.toLocaleString("ko-KR")}</span>
+            <span className="font-bold text-sm">{displayPrice === null ? "가격 이용 불가" : `${livePrice?.currency ?? metadata?.currency ?? ""} ${displayPrice.toLocaleString("ko-KR")}`}</span>
             {livePrice && <span className="text-xs ml-2" style={{ color: isUp ? "var(--accent-green)" : "var(--accent-red)" }}>
               {isUp ? "▲" : "▼"} {Math.abs(displayChange).toLocaleString()} ({displayChangePct.toFixed(2)}%)
             </span>}
             {livePrice && (
               <span className="text-xs ml-2 px-1 rounded" style={{ background: "var(--accent-green)22", color: "var(--accent-green)" }}>
-                백엔드 현재가 · 실시간 보장 아님
+                공개 현재가 · 지연 가능
               </span>
             )}
           </div>
@@ -82,7 +83,7 @@ export default function StockChart() {
       </div>
 
       <div className="mb-2"><DataProvenance status={status} />{!livePrice && latest && <span className="text-xs ml-2" style={{ color: "var(--muted)" }}>가격: 마지막 일봉 종가 ({latest.date})</span>}</div>
-      <div className="mb-2 text-xs" style={{ color: "var(--muted)" }}>현재가: <DataProvenance status={priceStatus} /></div>
+      <div className="mb-2 text-xs" style={{ color: "var(--muted)" }}>현재가: <DataProvenance status={priceStatus} /><MarketSource data={livePrice} /><MarketSource data={metadata} /></div>
       {loading || status === "unavailable" ? (
         <div className="flex items-center justify-center h-[220px]" style={{ color: "var(--muted)" }}>
           <span className="text-xs">{loading ? "차트 로딩 중..." : `${ticker} 차트 이용 불가 · 샘플 대체 없음`}</span>

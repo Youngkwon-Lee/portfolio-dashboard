@@ -69,6 +69,9 @@ jobs:
       - name: Verify dashboard data provenance contracts
         run: pnpm run test:provenance
 
+      - name: Verify secure public market integration
+        run: pnpm run test:market
+
       - name: TypeScript check
         run: pnpm run typecheck
 

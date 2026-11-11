@@ -13,6 +13,7 @@ import {
   type Time,
 } from "lightweight-charts";
 import DataProvenance from "./DataProvenance";
+import MarketSource from "./MarketSource";
 import { useChart, usePrice } from "@/hooks/usePortfolio";
 import { detectMarket } from "@/lib/api";
 import type { Candle } from "@/lib/api";
@@ -77,7 +78,7 @@ export default function CandlestickChart() {
   const ma5Ref       = useRef<ISeriesApi<"Line"> | null>(null);
   const ma20Ref      = useRef<ISeriesApi<"Line"> | null>(null);
 
-  const { candles, loading, status } = useChart(ticker, period);
+  const { candles, loading, status, metadata } = useChart(ticker, period);
   const { data: livePrice, status: priceStatus } = usePrice(ticker);
   const market               = detectMarket(ticker);
 
@@ -160,14 +161,13 @@ export default function CandlestickChart() {
       const isUp = c.close >= c.open;
       const color = isUp ? "#3fb950" : "#f85149";
 
-      tooltip.innerHTML = `
-        <div style="color:#8b949e;margin-bottom:2px">${String(param.time)}</div>
-        <div>시가 <b>${c.open.toLocaleString()}</b></div>
-        <div style="color:#f85149">고가 <b>${c.high.toLocaleString()}</b></div>
-        <div style="color:#58a6ff">저가 <b>${c.low.toLocaleString()}</b></div>
-        <div>종가 <b style="color:${color}">${c.close.toLocaleString()}</b>
-          <span style="color:${color}">(${isUp ? "+" : ""}${changePct}%)</span></div>
-      `;
+      tooltip.replaceChildren();
+      const lines = [String(param.time), `시가 ${c.open.toLocaleString()}`, `고가 ${c.high.toLocaleString()}`, `저가 ${c.low.toLocaleString()}`, `종가 ${c.close.toLocaleString()} (${isUp ? "+" : ""}${changePct}%)`];
+      for (const text of lines) {
+        const line = document.createElement("div");
+        line.textContent = text;
+        tooltip.appendChild(line);
+      }
       tooltip.style.display = "block";
     });
 
@@ -259,7 +259,7 @@ export default function CandlestickChart() {
           {/* 현재가 */}
           <div className="flex items-center gap-2">
             <span className="font-bold text-sm">
-              {displayPrice === null ? "가격 이용 불가" : `${isKRX ? "₩" : ""}${displayPrice.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}`}
+              {displayPrice === null ? "가격 이용 불가" : `${livePrice?.currency ?? metadata?.currency ?? ""} ${displayPrice.toLocaleString("ko-KR", { maximumFractionDigits: 2 })}`}
             </span>
             {livePrice && <span className="text-xs" style={{ color: priceColor }}>
               {isUp ? "▲" : "▼"} {Math.abs(displayChange).toLocaleString("ko-KR", { maximumFractionDigits: 2 })} ({displayPct.toFixed(2)}%)
@@ -267,7 +267,7 @@ export default function CandlestickChart() {
             {livePrice && (
               <span className="text-xs px-1.5 py-0.5 rounded font-semibold"
                 style={{ background: "var(--accent-green)22", color: "var(--accent-green)", border: "1px solid var(--accent-green)44" }}>
-                백엔드 현재가 · 실시간 보장 아님
+                공개 현재가 · 지연 가능
               </span>
             )}
           </div>
@@ -305,7 +305,7 @@ export default function CandlestickChart() {
       </div>
 
       <div className="mb-2"><DataProvenance status={status} />{!livePrice && last && <span className="text-xs ml-2" style={{ color: "var(--muted)" }}>가격: 마지막 일봉 종가 ({last.date})</span>}</div>
-      <div className="mb-2 text-xs" style={{ color: "var(--muted)" }}>현재가: <DataProvenance status={priceStatus} /></div>
+      <div className="mb-2 text-xs" style={{ color: "var(--muted)" }}>현재가: <DataProvenance status={priceStatus} /><MarketSource data={livePrice} /><MarketSource data={metadata} /></div>
       {/* ── 차트 컨테이너 ── */}
       <div className="relative">
         {(loading || status === "unavailable") && (
